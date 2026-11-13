@@ -1,0 +1,94 @@
+@use '../../../theme' as *;
+
+.diskBody {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 34%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  pointer-events: none;
+  color: var(--ui-text-3);
+}
+
+.empty :global([class^='icon-']),
+.empty :global([class*=' icon-']) {
+  font-size: 28px;
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+
+.emptyTitle {
+  font-size: 12px;
+  color: var(--ui-text-2);
+}
+
+.emptyHint {
+  font-size: 10.5px;
+  color: var(--ui-text-3);
+}
+
+.grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.reportWrap {
+  height: 34%;
+  min-height: 150px;
+  flex: none;
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.reportHead {
+  height: 30px;
+  flex: none;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--ui-border);
+  display: flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ui-text-3);
+}
+
+.report {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--ui-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ui-text-2);
+}
+
+.statusOk {
+  color: var(--ui-green);
+}
+
+.statusBad {
+  color: var(--ui-red);
+}
+
+.statusUnknown {
+  color: var(--ui-text-3);
+}

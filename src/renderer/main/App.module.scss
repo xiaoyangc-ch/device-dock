@@ -1,0 +1,163 @@
+.shell {
+  --ui-bg: #ffffff;
+  --ui-chrome: #f4f6f8;
+  --ui-chrome-2: #eef1f4;
+  --ui-surface: #ffffff;
+  --ui-subtle: #f7f8fa;
+  --ui-hover: #f1f4f7;
+  --ui-border: #e5e8ee;
+  --ui-border-strong: #d6dae2;
+  --ui-text: #1b1f27;
+  --ui-text-2: #5e6774;
+  --ui-text-3: #8d95a2;
+  --ui-accent: #1677ff;
+  --ui-accent-ink: #0b5cd5;
+  --ui-accent-soft: #e9f2ff;
+  --ui-green: #17a34a;
+  --ui-green-soft: rgba(23, 163, 74, 0.12);
+  --ui-red: #dc2626;
+  --ui-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--ui-chrome);
+  color: var(--ui-text);
+  font-size: 13px;
+}
+
+:global(.-theme-with-dark-background) .shell {
+  --ui-bg: #1c1e22;
+  --ui-chrome: #17191d;
+  --ui-chrome-2: #1b1e22;
+  --ui-surface: #202327;
+  --ui-subtle: #24272c;
+  --ui-hover: #292d33;
+  --ui-border: #2c3036;
+  --ui-border-strong: #3a3f47;
+  --ui-text: #e7e9ee;
+  --ui-text-2: #a7aeb9;
+  --ui-text-3: #747d8a;
+  --ui-accent: #4d8dff;
+  --ui-accent-ink: #8ab4ff;
+  --ui-accent-soft: #1d2a44;
+  --ui-green: #34c759;
+  --ui-green-soft: rgba(52, 199, 89, 0.14);
+  --ui-red: #f87171;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-bg);
+}
+
+.shell :global(.panel-toolbar) {
+  background: var(--ui-bg) !important;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+/* 旧页面还在用 LunaDataGrid：统一去掉竖线/斑马纹，改成 3.0 的表格语言。
+   文件页的 FileGrid.module.scss 有更具体的列宽和行高规则。 */
+.shell :global(.luna-data-grid) {
+  border: none !important;
+  background: transparent;
+  color: var(--ui-text);
+  font-size: 12px;
+}
+
+.shell :global(.luna-data-grid th),
+.shell :global(.luna-data-grid td) {
+  border-left: 0 !important;
+  border-bottom: 1px solid var(--ui-border);
+  padding: 0 10px;
+}
+
+.shell :global(.luna-data-grid th) {
+  background: var(--ui-subtle) !important;
+  color: var(--ui-text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.shell :global(.luna-data-grid-data-container tr:nth-child(even)) {
+  background: transparent !important;
+}
+
+.shell :global(.luna-data-grid-filler-row td) {
+  border-bottom: 0 !important;
+}
+
+.shell :global(.luna-data-grid-node:hover) {
+  background: var(--ui-hover);
+}
+
+.shell :global(.luna-data-grid-node.luna-data-grid-selected),
+.shell
+  :global(.luna-data-grid:focus .luna-data-grid-node.luna-data-grid-selected) {
+  background: var(--ui-accent-soft) !important;
+  color: var(--ui-text) !important;
+}
+
+.panels {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--ui-bg);
+}
+
+.ready {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ui-text-3);
+  font-size: 12px;
+}
+
+/* 统一滚动条：日志表格、文件列表、终端都用同一套细滚动条；
+   否则深色模式下会出现系统默认的白色横条（日志页最明显） */
+.shell :global(::-webkit-scrollbar) {
+  width: 10px;
+  height: 10px;
+}
+
+.shell :global(::-webkit-scrollbar-thumb) {
+  background: var(--ui-border-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 5px;
+}
+
+.shell :global(::-webkit-scrollbar-thumb:hover) {
+  background: var(--ui-text-3);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.shell :global(::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+.shell :global(::-webkit-scrollbar-corner) {
+  background: transparent;
+}
+
+/* 键盘导航要有可见焦点：自定义按钮默认没有任何 focus 轮廓 */
+.shell :global(button:focus-visible) {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}

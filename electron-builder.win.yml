@@ -1,0 +1,30 @@
+appId: com.devicedock.app
+productName: 设备坞
+directories:
+  output: ../release/${version}
+  buildResources: build
+files:
+  - main
+  - preload
+  - renderer
+extraResources:
+  - from: resources
+    to: ./
+    filter:
+      - '**/*'
+      # win 包不塞 darwin 版 adb（18M）
+      - '!adb/adb'
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerSidebar: build/installerSidebar.bmp

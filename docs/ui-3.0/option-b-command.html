@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>APM 远程 3.0 · 方案二 指挥台</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .devices {
+    width: 248px; flex: none; background: var(--chrome);
+    border-right: 1px solid var(--border); display: flex;
+    flex-direction: column; min-height: 0;
+  }
+  .devices .brand { padding-left: 78px; }
+  .dev-head {
+    height: 30px; flex: none; display: flex; align-items: center;
+    padding: 4px 12px 0 14px; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .06em; color: var(--text-3);
+  }
+  .dev-head .n {
+    margin-left: 7px; font: 10px var(--mono); color: var(--text-3);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .dev-head .plus { margin-left: auto; color: var(--text-3); }
+  .dev-search {
+    margin: 7px 12px 8px; height: 28px; flex: none; display: flex;
+    align-items: center; gap: 6px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text-3); font-size: 11px;
+  }
+  .dev-list { flex: 1; min-height: 0; padding: 0 8px; overflow: hidden; }
+  .dev-group {
+    padding: 10px 6px 4px; font-size: 9.5px; letter-spacing: .06em;
+    color: var(--text-3); font-weight: 600;
+  }
+  .dev {
+    height: 50px; margin-bottom: 2px; padding: 7px 9px;
+    border: 1px solid transparent; border-radius: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dev.active {
+    background: var(--surface); border-color: var(--border);
+    box-shadow: var(--shadow-card);
+  }
+  .dev .info { min-width: 0; flex: 1; }
+  .dev .nm {
+    display: flex; align-items: center; gap: 6px; font-size: 11.8px;
+    font-weight: 600; color: var(--text-2); white-space: nowrap;
+  }
+  .dev.active .nm { color: var(--text); }
+  .dev .ip {
+    margin-top: 3px; font: 9.5px var(--mono); color: var(--text-3);
+    letter-spacing: -0.02em; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dev .lat {
+    font: 9.5px var(--mono); color: var(--text-3); align-self: flex-start;
+    margin-top: 2px;
+  }
+  .dev.off { opacity: .55; }
+  .dev.off .nm { font-weight: 500; }
+  .dev-foot {
+    height: 40px; flex: none; border-top: 1px solid var(--border);
+    padding: 0 14px; display: flex; align-items: center; gap: 7px;
+    color: var(--text-3); font-size: 10.5px;
+  }
+  .dev-foot .grow { flex: 1; }
+
+  .tools {
+    width: 168px; flex: none; background: #fafbfc;
+    border-right: 1px solid var(--border); display: flex;
+    flex-direction: column; min-height: 0;
+  }
+  html.dark .tools { background: var(--chrome-2); }
+  .tools-head {
+    height: 54px; flex: none; display: flex; align-items: center;
+    padding: 0 14px; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .06em; color: var(--text-3);
+  }
+  .tools .nav { padding: 0 8px 8px; }
+  .tools .nav-item { font-size: 12px; height: 29px; }
+  .tools .nav-label { padding-top: 12px; }
+  .tools .nav-item .ico { width: 15px; }
+
+  .page-head { height: 56px; }
+  .pathbar { height: 42px; }
+  .search { width: 188px; }
+  .tablewrap .thead, .tablewrap .row {
+    grid-template-columns: minmax(0, 1fr) 84px 70px 128px 88px;
+  }
+  .inspector { width: 292px; }
+  .tablefoot {
+    height: 28px; flex: none; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; color: var(--text-3);
+  }
+  .window { position: relative; }
+  .win-ctrl {
+    position: absolute; right: 14px; top: 15px; display: flex; gap: 10px;
+    color: var(--text-3); opacity: .55;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="cap">
+    <span class="no">方案 02</span>
+    <h1>指挥台</h1>
+    <p>设备列表一级化 · 工具二级 · 多台设备同时在线时效率最高</p>
+    <span class="right">APM 远程 3.0 · UI 方向</span>
+  </div>
+
+  <div class="window">
+    <div class="traffic"><i></i><i></i><i></i></div>
+
+    <aside class="devices">
+      <div class="brand"><span class="mark"></span>APM <em>远程</em></div>
+      <div class="dev-head">设备<span class="n">7</span><span class="ico plus" data-i="plus" data-s="14"></span></div>
+      <div class="dev-search"><span class="ico" data-i="search" data-s="13"></span>搜索名称或 IP</div>
+
+      <div class="dev-list">
+        <div class="dev-group">在线 · 4</div>
+
+        <div class="dev active">
+          <span class="dot"></span>
+          <div class="info">
+            <div class="nm">rk356x_box</div>
+            <div class="ip">77.70.0.100:5555</div>
+          </div>
+          <span class="lat">55 ms</span>
+        </div>
+        <div class="dev">
+          <span class="dot"></span>
+          <div class="info">
+            <div class="nm">rk356x_box-02</div>
+            <div class="ip">77.70.0.101:5555</div>
+          </div>
+          <span class="lat">48 ms</span>
+        </div>
+        <div class="dev">
+          <span class="dot"></span>
+          <div class="info">
+            <div class="nm">rk356x_box-03</div>
+            <div class="ip">77.70.0.102:5555</div>
+          </div>
+          <span class="lat">63 ms</span>
+        </div>
+        <div class="dev">
+          <span class="dot"></span>
+          <div class="info">
+            <div class="nm">展厅-01</div>
+            <div class="ip">77.70.0.106:5555</div>
+          </div>
+          <span class="lat">71 ms</span>
+        </div>
+
+        <div class="dev-group">离线 · 3</div>
+        <div class="dev off">
+          <span class="dot off"></span>
+          <div class="info">
+            <div class="nm">rk356x_box-05</div>
+            <div class="ip">77.70.0.104:5555</div>
+          </div>
+          <span class="lat">—</span>
+        </div>
+        <div class="dev off">
+          <span class="dot off"></span>
+          <div class="info">
+            <div class="nm">仓库-02</div>
+            <div class="ip">77.70.0.108:5555</div>
+          </div>
+          <span class="lat">—</span>
+        </div>
+        <div class="dev off">
+          <span class="dot off"></span>
+          <div class="info">
+            <div class="nm">测试机</div>
+            <div class="ip">192.168.1.23:5555</div>
+          </div>
+          <span class="lat">—</span>
+        </div>
+      </div>
+
+      <div class="dev-foot">
+        <span class="ico" data-i="link" data-s="14"></span><span>设备连接</span>
+        <span class="grow"></span>
+        <span class="ico" data-i="sliders" data-s="15"></span>
+      </div>
+    </aside>
+
+    <aside class="tools">
+      <div class="tools-head">工具</div>
+      <nav class="nav">
+        <div class="nav-label">设备</div>
+        <a class="nav-item"><span class="ico" data-i="monitor"></span>概览</a>
+        <a class="nav-item active"><span class="ico" data-i="folder"></span>文件</a>
+        <a class="nav-item"><span class="ico" data-i="grid"></span>应用</a>
+
+        <div class="nav-label">系统</div>
+        <a class="nav-item"><span class="ico" data-i="cpu"></span>进程</a>
+        <a class="nav-item"><span class="ico" data-i="activity"></span>性能</a>
+        <a class="nav-item"><span class="ico" data-i="database"></span>存储</a>
+        <a class="nav-item"><span class="ico" data-i="terminal"></span>终端</a>
+
+        <div class="nav-label">采集与业务</div>
+        <a class="nav-item"><span class="ico" data-i="camera"></span>截屏</a>
+        <a class="nav-item"><span class="ico" data-i="fileText"></span>日志</a>
+        <a class="nav-item"><span class="ico" data-i="radio"></span>APM 远程</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <div class="page-title">文件</div>
+        <div class="page-sub">rk356x_box<span class="sep">/</span>内部存储</div>
+        <div class="head-actions">
+          <button class="btn primary"><span class="ico" data-i="upload" data-s="14"></span>上传</button>
+          <button class="btn"><span class="ico" data-i="plus" data-s="14"></span>新建文件夹</button>
+          <button class="iconbtn"><span class="ico" data-i="refresh" data-s="15"></span></button>
+          <button class="iconbtn"><span class="ico" data-i="more" data-s="15"></span></button>
+        </div>
+      </header>
+
+      <div class="pathbar">
+        <div class="navbtns">
+          <button class="iconbtn sm"><span class="ico" data-i="arrowLeft" data-s="15"></span></button>
+          <button class="iconbtn sm"><span class="ico" data-i="arrowRight" data-s="15"></span></button>
+          <button class="iconbtn sm"><span class="ico" data-i="arrowUp" data-s="15"></span></button>
+        </div>
+        <div class="crumbs">
+          <span class="crumb">内部存储</span>
+          <span class="crumb-sep"><span class="ico" data-i="chevronRight" data-s="11"></span></span>
+          <span class="crumb cur">Download</span>
+          <span class="path-mono">/sdcard/Download</span>
+        </div>
+        <div class="search">
+          <span class="ico" data-i="search" data-s="14"></span>
+          <span>搜索当前目录</span>
+          <span class="kbd">⌘F</span>
+        </div>
+        <button class="btn mini">全盘</button>
+        <div class="seg">
+          <span class="on"><span class="ico" data-i="list" data-s="14"></span></span>
+          <span><span class="ico" data-i="grid" data-s="14"></span></span>
+        </div>
+        <button class="iconbtn on" style="background:var(--accent-soft);color:var(--accent)"><span class="ico" data-i="panelRight" data-s="15"></span></button>
+      </div>
+
+      <div class="body">
+        <div class="tablewrap">
+          <div class="thead">
+            <span class="sort">名称 <span class="ico" data-i="chevronDown" data-s="10"></span></span>
+            <span class="num">大小</span>
+            <span>类型</span>
+            <span>修改时间</span>
+            <span>权限</span>
+          </div>
+
+          <div class="row"><span class="name"><span class="ico" data-i="video"></span><span class="txt">2026-11-11_现场录像.mp4</span></span><span class="size">428.6 MB</span><span class="type">视频</span><span class="time">2026-11-11 16:42</span><span class="perm">-rw-rw-rw-</span></div>
+          <div class="row selected"><span class="name"><span class="ico" data-i="package"></span><span class="txt">APM远程-2.4.8.apk</span></span><span class="size">96.4 MB</span><span class="type">APK</span><span class="time">2026-11-11 15:08</span><span class="perm">-rw-r--r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">apm-config.json</span></span><span class="size">2.4 KB</span><span class="type">JSON</span><span class="time">2026-11-10 09:21</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="table"></span><span class="txt">设备清单.xlsx</span></span><span class="size">38.2 KB</span><span class="type">XLSX</span><span class="time">2026-11-09 14:03</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">firmware</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-10-28 11:20</span><span class="perm">drwxr-xr-x</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">logs</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-11-11 17:01</span><span class="perm">drwxr-xr-x</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">截图</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-11-08 10:12</span><span class="perm">drwxr-xr-x</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">运维记录.txt</span></span><span class="size">6.8 KB</span><span class="type">TXT</span><span class="time">2026-11-07 18:44</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">apm-debug.log</span></span><span class="size">1.2 MB</span><span class="type">LOG</span><span class="time">2026-11-11 17:12</span><span class="perm">-rw-r--r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="file"></span><span class="txt">出厂配置.zip</span></span><span class="size">12.8 MB</span><span class="type">ZIP</span><span class="time">2026-10-20 09:30</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">device-info.json</span></span><span class="size">1.1 KB</span><span class="type">JSON</span><span class="time">2026-11-06 12:05</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">adb_keys</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-09-18 08:41</span><span class="perm">drwx------</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="package"></span><span class="txt">远程协助.apk</span></span><span class="size">22.7 MB</span><span class="type">APK</span><span class="time">2026-10-30 16:22</span><span class="perm">-rw-r--r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="image"></span><span class="txt">2026-10-30_调试截图.png</span></span><span class="size">842 KB</span><span class="type">PNG</span><span class="time">2026-10-30 17:02</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">boot.log</span></span><span class="size">128 KB</span><span class="type">LOG</span><span class="time">2026-11-11 07:03</span><span class="perm">-rw-r--r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="file"></span><span class="txt">客户签字单.pdf</span></span><span class="size">214 KB</span><span class="type">PDF</span><span class="time">2026-11-05 10:15</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">待上传</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-11-11 18:02</span><span class="perm">drwxr-xr-x</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="fileText"></span><span class="txt">apm-update.json</span></span><span class="size">980 B</span><span class="type">JSON</span><span class="time">2026-11-11 18:00</span><span class="perm">-rw-rw-r--</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="folder"></span><span class="txt dir">系统日志</span></span><span class="size">—</span><span class="type">文件夹</span><span class="time">2026-11-04 20:10</span><span class="perm">drwxr-xr-x</span></div>
+          <div class="row"><span class="name"><span class="ico" data-i="package"></span><span class="txt">apm-tools.apk</span></span><span class="size">4.6 MB</span><span class="type">APK</span><span class="time">2026-10-26 13:38</span><span class="perm">-rw-r--r--</span></div>
+          <div class="tablefoot">已显示全部 20 项</div>
+        </div>
+
+        <aside class="inspector">
+          <div class="insp-head">详细信息<span class="ico x" data-i="x" data-s="13"></span></div>
+          <div class="insp-body">
+            <div class="preview">
+              <div class="file-tile"><span class="ico" data-i="package" data-s="22"></span></div>
+              <div>
+                <div class="nm">APM远程-2.4.8.apk</div>
+                <div class="meta">96.4 MB · APK</div>
+              </div>
+            </div>
+            <div class="props">
+              <div class="prop"><span class="k">所属设备</span><span class="v">rk356x_box</span></div>
+              <div class="prop"><span class="k">路径</span><span class="v">/sdcard/Download</span></div>
+              <div class="prop"><span class="k">修改时间</span><span class="v">2026-11-11 15:08</span></div>
+              <div class="prop"><span class="k">权限</span><span class="v">-rw-r--r--</span></div>
+              <div class="prop"><span class="k">所有者</span><span class="v">shell:shell</span></div>
+            </div>
+          </div>
+          <div class="insp-actions">
+            <button class="btn primary"><span class="ico" data-i="download" data-s="14"></span>下载到本机</button>
+            <button class="btn"><span class="ico" data-i="package" data-s="14"></span>安装到设备</button>
+            <div class="insp-links"><span>重命名</span><span>复制到…</span><span class="danger">删除</span></div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="statusbar">
+        <span>共 20 项</span>
+        <span>已选择 1 项</span>
+        <span class="right">
+          <span class="cell">传输队列 <span class="mono">0</span></span>
+          <span class="cell">内部存储 <span class="mono">6.1 GB</span> 可用</span>
+        </span>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="icons.js"></script>
+</body>
+</html>

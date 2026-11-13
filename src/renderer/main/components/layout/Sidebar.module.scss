@@ -1,0 +1,240 @@
+.sidebar {
+  width: 316px;
+  flex: none;
+  height: 100%;
+  background: var(--ui-chrome);
+  border-right: 1px solid var(--ui-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.brand {
+  height: 48px;
+  flex: none;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ui-text);
+  white-space: nowrap;
+}
+
+.brand em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ui-text-2);
+}
+
+:global(body.native-titlebar-overlay) .brand {
+  /* macOS 红绿灯在 (18,18)，品牌文字退到 84px 之外 */
+  padding-left: 84px;
+  -webkit-app-region: drag;
+}
+
+:global(body.native-titlebar-overlay.native-titlebar-fullscreen) .brand {
+  /* 全屏时红绿灯隐藏，不需要再给系统按钮留位置 */
+  padding-left: 16px;
+  -webkit-app-region: no-drag;
+}
+
+.mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--ui-accent);
+  margin-right: 1px;
+}
+
+.nav {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.navLabel {
+  padding: 13px 9px 5px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--ui-text-3);
+}
+
+.navItem {
+  width: 100%;
+  height: 30px;
+  margin-bottom: 1px;
+  padding: 0 9px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--ui-text-2);
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.navItem :global([class^='icon-']),
+.navItem :global([class*=' icon-']) {
+  font-size: 15px;
+  color: var(--ui-text-3);
+  flex: none;
+}
+
+.navItem:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+
+.navItem.active {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-ink);
+  font-weight: 600;
+}
+
+.navItem.active :global([class^='icon-']),
+.navItem.active :global([class*=' icon-']) {
+  color: var(--ui-accent);
+}
+
+.footer {
+  height: 40px;
+  flex: none;
+  border-top: 1px solid var(--ui-border);
+  padding: 0 10px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--ui-text-3);
+  white-space: nowrap;
+}
+
+.footer .grow {
+  flex: 1;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-green);
+  box-shadow: 0 0 0 3px var(--ui-green-soft);
+  flex: none;
+}
+
+.dot.off {
+  background: var(--ui-text-3);
+  box-shadow: none;
+}
+
+.settings {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-text-3);
+  font-size: 15px;
+}
+
+.settings:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+
+/* 折叠态：只留图标。mac 红绿灯占左侧约 84px，所以折叠宽度不能比 84 更窄 */
+.collapsed {
+  width: 84px;
+}
+
+.collapsed .brand {
+  padding-left: 0;
+  justify-content: center;
+}
+
+:global(body.native-titlebar-overlay) .collapsed .brand {
+  /* 红绿灯在 (18,18)：折叠时把品牌 mark 下移到它们下面 */
+  padding-top: 30px;
+  height: 78px;
+}
+
+:global(body.native-titlebar-overlay.native-titlebar-fullscreen) .collapsed .brand {
+  padding-top: 0;
+  height: 48px;
+}
+
+.collapsed .brandText {
+  display: none;
+}
+
+.collapsed .nav {
+  padding: 4px 0 8px;
+}
+
+.collapsed .navLabel {
+  display: none;
+}
+
+.collapsed .navItem {
+  justify-content: center;
+  padding: 0;
+  margin: 0 6px 1px;
+}
+
+.collapsed .navText {
+  display: none;
+}
+
+.collapsed .footer {
+  justify-content: center;
+  padding: 0 4px;
+  gap: 4px;
+}
+
+.collapsed .footerText,
+.collapsed .dot,
+.collapsed .grow {
+  display: none;
+}
+
+.collapseBtn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-text-3);
+  font-size: 15px;
+  flex: none;
+}
+
+.collapseBtn:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+
+.collapsed .collapseBtn span {
+  transform: rotate(180deg);
+}

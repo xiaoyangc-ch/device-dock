@@ -1,0 +1,51 @@
+.viewer {
+  background: var(--ui-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-viewer {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ui-text-3);
+}
+
+.empty :global([class^='icon-']),
+.empty :global([class*=' icon-']) {
+  font-size: 34px;
+  opacity: 0.6;
+}
+
+.empty-title {
+  font-size: 12px;
+  color: var(--ui-text-2);
+}
+
+.empty-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 5px;
+  background: var(--ui-surface);
+  color: var(--ui-text-2);
+  font-size: 11.5px;
+}
+
+.empty-btn:hover {
+  background: var(--ui-hover);
+}
+
+.empty-btn:disabled {
+  opacity: 0.4;
+}

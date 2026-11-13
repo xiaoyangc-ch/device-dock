@@ -1,0 +1,56 @@
+.head {
+  height: 56px;
+  flex: none;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-bg);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+:global(body.native-titlebar-overlay) .head {
+  -webkit-app-region: drag;
+}
+
+.title {
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ui-text);
+}
+
+.status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--ui-text-3);
+  min-width: 0;
+}
+
+.name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10px var(--ui-mono);
+  color: var(--ui-text-2);
+}
+
+.text {
+  color: var(--ui-text-3);
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ui-green);
+  flex: none;
+}
+
+.dot.off {
+  background: var(--ui-text-3);
+}

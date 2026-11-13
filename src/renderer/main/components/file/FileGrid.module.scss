@@ -1,0 +1,132 @@
+.wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.grid :global(.luna-data-grid) {
+  border: none !important;
+  background: transparent;
+  color: var(--ui-text);
+  font-size: 12px;
+}
+
+.grid :global(.luna-data-grid table) {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.grid :global(.luna-data-grid-header-container) {
+  height: 30px;
+  background: var(--ui-subtle);
+}
+
+.grid :global(.luna-data-grid th) {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-subtle);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--ui-text-3);
+  text-align: left;
+}
+
+.grid :global(.luna-data-grid th:nth-child(2)) {
+  text-align: right;
+}
+
+.grid :global(.luna-data-grid th .luna-data-grid-icon-caret-down),
+.grid :global(.luna-data-grid th .luna-data-grid-icon-caret-up) {
+  color: var(--ui-text-3);
+}
+
+.grid :global(.luna-data-grid td) {
+  height: 31px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 12px;
+  color: var(--ui-text);
+}
+
+.grid :global(.luna-data-grid-data-container tr:nth-child(even)) {
+  background: transparent;
+}
+
+.grid :global(.luna-data-grid-node:hover) {
+  background: var(--ui-hover);
+}
+
+.grid :global(.luna-data-grid-node.luna-data-grid-selected),
+.grid
+  :global(.luna-data-grid:focus .luna-data-grid-node.luna-data-grid-selected) {
+  background: var(--ui-accent-soft) !important;
+  color: var(--ui-text) !important;
+}
+
+.grid
+  :global(
+    .luna-data-grid-node.luna-data-grid-selected + .luna-data-grid-node.luna-data-grid-selected td
+  ) {
+  border-top: 0;
+}
+
+.grid :global(.luna-data-grid td:nth-child(2)) {
+  text-align: right;
+  font-family: var(--ui-mono);
+  font-size: 11px;
+  color: var(--ui-text-2);
+}
+
+.grid :global(.luna-data-grid td:nth-child(4)) {
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  color: var(--ui-text-2);
+}
+
+.grid :global(.luna-data-grid td:nth-child(5)) {
+  font-family: var(--ui-mono);
+  font-size: 10.5px;
+  color: var(--ui-text-3);
+}
+
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.name-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  text-align: center;
+  object-fit: contain;
+  font-size: 16px;
+  color: var(--ui-text-3);
+}
+
+.grid
+  :global(.luna-data-grid-node.luna-data-grid-selected)
+  .name-icon {
+  color: var(--ui-accent);
+}
+
+.name-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,28 @@
+appId: com.devicedock.app
+productName: 设备坞
+directories:
+  output: ../release/${version}
+  buildResources: build
+files:
+  - main
+  - preload
+  - renderer
+extraResources:
+  - from: resources
+    to: ./
+    filter:
+      - '**/*'
+      # mac 包不塞 Windows 的 adb（adb.exe 6.3M + 两个 DLL）
+      - '!adb/adb.exe'
+      - '!adb/AdbWinApi.dll'
+      - '!adb/AdbWinUsbApi.dll'
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+mac:
+  target:
+    - dir
+  icon: build/icon.icns
+  electronLanguages:
+    - zh_CN
+    - en
+  identity: null
+  category: public.app-category.developer-tools

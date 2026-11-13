@@ -1,0 +1,11 @@
+.body {
+  background: var(--ui-bg);
+}
+
+.logcat {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  border: none !important;
+  font-size: 11.5px;
+}

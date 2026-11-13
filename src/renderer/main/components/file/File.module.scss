@@ -1,0 +1,14 @@
+/* 3.0 文件页只剩「传输中图标闪烁」还用旧样式；其余布局都在 FilePage.module.scss */
+.blink {
+  animation: blinkColor 1s infinite;
+}
+
+@keyframes blinkColor {
+  0%,
+  100% {
+    color: var(--ui-text-3);
+  }
+  50% {
+    color: var(--ui-accent);
+  }
+}

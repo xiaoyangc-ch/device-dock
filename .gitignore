@@ -1,0 +1,8 @@
+node_modules/
+dist/
+release/
+*.log
+tmp_*
+*_out.txt
+*_check.txt
+.test-build/
