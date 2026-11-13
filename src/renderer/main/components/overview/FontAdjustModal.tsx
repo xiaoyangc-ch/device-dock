@@ -10,15 +10,14 @@ interface IProps extends IModalProps {
   initialScale: number
 }
 
+/** 系统字体缩放：改的是设备设置，界面会立刻重排。 */
 export default function FontAdjustModal(props: IProps) {
   const [scale, setScale] = useState(props.initialScale)
 
-  async function onChange(val: number) {
-    if (!store.device) {
-      return
-    }
-    setScale(val)
-    await main.setFontScale(store.device.id, val)
+  async function onChange(value: number) {
+    if (!store.device) return
+    setScale(value)
+    await main.setFontScale(store.device.id, value)
   }
 
   return createPortal(

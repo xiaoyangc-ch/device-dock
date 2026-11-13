@@ -1,3 +1,7 @@
+/**
+ * 概览页：存储/内存/分辨率三个指标 + 设备/系统/网络三组信息。
+ * 单击行复制值，双击「字体缩放」打开调整弹窗。
+ */
 import { observer } from 'mobx-react-lite'
 import Style from './Overview.module.scss'
 import { JSX, useEffect, useRef, useState } from 'react'
@@ -28,36 +32,110 @@ export default observer(function Overview() {
   const [overview, setOverview] = useState<
     types.PlainObj<string | number | boolean>
   >({})
-  const [fontAdjustModalVisible, setFontAdjustModalVisible] = useState(false)
+  const [fontModalVisible, setFontModalVisible] = useState(false)
+
   // 切设备时旧请求可能后到：只认最后一次，别让上一台的数据盖住新设备
   const loadSeq = useRef(0)
-
   const { device } = store
 
-  // 面板在切换设备时不会卸载：deps 必须带上设备，否则永远显示上一台设备的数据。
-  // 强制刷新是必要的——旧设备还在加载时切过来，isLoading 仍是 true，
-  // 普通 refresh 会直接 return，新设备就再也没有机会加载。
+  // 面板切设备时不卸载：deps 必须带设备，否则永远显示上一台的数据。
+  // force 是必要的——旧设备还在加载时切过来 isLoading 仍为 true，
+  // 普通 refresh 会直接 return，新设备就再也没机会加载
   useEffect(() => {
     setOverview({})
     refresh(true)
   }, [device?.id, device?.type])
 
   async function refresh(force = false, noCache = false) {
-    if (!device || (isLoading && !force)) {
-      return
-    }
-    const seq = ++loadSeq.current
+    if (!device || (isLoading && !force)) return
 
+    const seq = ++loadSeq.current
     try {
       setIsLoading(true)
-      const overview = await getOverview(device.id, noCache)
+      const data = await getOverview(device.id, noCache)
       if (seq !== loadSeq.current) return
-      setOverview(overview)
+      setOverview(data)
     } catch {
       if (seq === loadSeq.current) notify(t('commonErr'), { icon: 'error' })
     }
 
     if (seq === loadSeq.current) setIsLoading(false)
+  }
+
+  async function root() {
+    if (!device || overview.root) return
+    try {
+      await main.root(device.id)
+      // adbd 重启要 1-2 秒：等它回来再刷新，否则读到旧状态
+      setTimeout(() => refresh(), 2000)
+    } catch {
+      notify(t('rootModeErr'), { icon: 'error' })
+    }
+  }
+
+  async function restartAdbServer() {
+    await main.restartAdbServer()
+    notify(t('adbServerRestarted'), { icon: 'success' })
+  }
+
+  function metric(
+    label: string,
+    value: string,
+    foot: string,
+    percent?: number
+  ) {
+    return (
+      <div className={Style.metric}>
+        <div className={Style.metricHead}>{label}</div>
+        <div className={Style.metricValue} title={value}>
+          {value}
+        </div>
+        <div
+          className={
+            percent === undefined ? Style.bar + ' ' + Style.barGhost : Style.bar
+          }
+        >
+          <span style={{ width: `${percent || 0}%` }} />
+        </div>
+        <div className={Style.metricFoot} title={foot}>
+          {foot}
+        </div>
+      </div>
+    )
+  }
+
+  function infoRow(
+    label: string,
+    value: string | number | boolean | undefined,
+    onDoubleClick?: () => void
+  ) {
+    let handled = false
+    const text =
+      value === undefined || value === '' ? t('unknown') : String(value)
+
+    return (
+      <div
+        className={Style.row}
+        onClick={() => {
+          // 等 200ms 看是不是双击：单击才复制，避免双击也闪一次「已复制」
+          setTimeout(() => {
+            if (handled) return
+            copy(text)
+            notify(t('copied'), { icon: 'info' })
+          }, 200)
+        }}
+        onDoubleClick={() => {
+          if (!onDoubleClick) return
+          handled = true
+          onDoubleClick()
+        }}
+      >
+        <span className={Style.k}>{label}</span>
+        <span className={Style.v} title={text}>
+          {text}
+        </span>
+      </div>
+    )
   }
 
   let content: JSX.Element | null = null
@@ -71,6 +149,7 @@ export default observer(function Overview() {
     const storageTotal = Number(overview.storageTotal || 0)
     const memUsed = Number(overview.memUsed || 0)
     const memTotal = Number(overview.memTotal || 0)
+
     const storagePct = storageTotal
       ? Math.min(100, Math.round((storageUsed / storageTotal) * 100))
       : 0
@@ -99,8 +178,7 @@ export default observer(function Overview() {
             t('physical', {
               size: overview.physicalResolution || '--',
               dpi: overview.physicalDensity || '--',
-            }),
-            undefined
+            })
           )}
         </div>
 
@@ -146,7 +224,7 @@ export default observer(function Overview() {
                 t('fontScale'),
                 overview.fontScale ? `${overview.fontScale}x` : '1x',
                 overview.fontScale
-                  ? () => setFontAdjustModalVisible(true)
+                  ? () => setFontModalVisible(true)
                   : undefined
               )}
             </div>
@@ -154,90 +232,15 @@ export default observer(function Overview() {
         </div>
 
         <FontAdjustModal
-          visible={fontAdjustModalVisible}
+          visible={fontModalVisible}
           initialScale={overview.fontScale as number}
           onClose={() => {
-            setFontAdjustModalVisible(false)
+            setFontModalVisible(false)
             refresh()
           }}
         />
       </div>
     )
-  }
-
-  function metric(
-    label: string,
-    value: string,
-    foot: string,
-    percent?: number
-  ) {
-    return (
-      <div className={Style.metric}>
-        <div className={Style.metricHead}>{label}</div>
-        <div className={Style.metricValue} title={value}>
-          {value}
-        </div>
-        <div
-          className={
-            percent === undefined ? Style.bar + ' ' + Style.barGhost : Style.bar
-          }
-        >
-          <span style={{ width: `${percent || 0}%` }} />
-        </div>
-        <div className={Style.metricFoot} title={foot}>
-          {foot}
-        </div>
-      </div>
-    )
-  }
-
-  function infoRow(
-    label: string,
-    value: string | number | boolean | undefined,
-    onDoubleClick?: () => void
-  ) {
-    let hasDoubleClick = false
-    const text = value === undefined || value === '' ? t('unknown') : String(value)
-
-    return (
-      <div
-        className={Style.row}
-        onClick={() => {
-          setTimeout(() => {
-            if (hasDoubleClick) return
-            copy(text)
-            notify(t('copied'), { icon: 'info' })
-          }, 200)
-        }}
-        onDoubleClick={() => {
-          if (!onDoubleClick) return
-          hasDoubleClick = true
-          onDoubleClick()
-        }}
-      >
-        <span className={Style.k}>{label}</span>
-        <span className={Style.v} title={text}>
-          {text}
-        </span>
-      </div>
-    )
-  }
-
-  async function root() {
-    if (!device || overview.root) {
-      return
-    }
-    try {
-      await main.root(device.id)
-      setTimeout(() => refresh(), 2000)
-    } catch {
-      notify(t('rootModeErr'), { icon: 'error' })
-    }
-  }
-
-  async function restartAdbServer() {
-    await main.restartAdbServer()
-    notify(t('adbServerRestarted'), { icon: 'success' })
   }
 
   return (

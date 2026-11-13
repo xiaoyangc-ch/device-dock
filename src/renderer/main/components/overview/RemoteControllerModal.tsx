@@ -1,3 +1,6 @@
+/**
+ * 遥控器：电源/音量、方向键 + OK、主页/返回/多任务，走 input keyevent。
+ */
 import LunaModal from 'luna-modal/react'
 import { observer } from 'mobx-react-lite'
 import { createPortal } from 'react-dom'
@@ -9,11 +12,9 @@ import store from '../../store'
 import { AndroidKeyCode } from '@yume-chan/scrcpy'
 
 export default observer(function RemoteControllerModal(props: IModalProps) {
-  function inputKey(keyCode: AndroidKeyCode) {
+  function press(keyCode: AndroidKeyCode) {
     return () => {
-      if (!store.device) {
-        return
-      }
+      if (!store.device) return
       main.inputKey(store.device.id, keyCode)
     }
   }
@@ -31,68 +32,70 @@ export default observer(function RemoteControllerModal(props: IModalProps) {
             <span
               className="icon-power"
               title={t('power')}
-              onClick={inputKey(AndroidKeyCode.Power)}
+              onClick={press(AndroidKeyCode.Power)}
             />
           </div>
           <div className={Style.button}>
             <span
               title={t('volumeDown')}
               className="icon-volume-down"
-              onClick={inputKey(AndroidKeyCode.VolumeDown)}
+              onClick={press(AndroidKeyCode.VolumeDown)}
             />
           </div>
           <div className={Style.button}>
             <span
               className="icon-volume"
               title={t('volumeUp')}
-              onClick={inputKey(AndroidKeyCode.VolumeUp)}
+              onClick={press(AndroidKeyCode.VolumeUp)}
             />
           </div>
         </div>
+
         <div className={Style.directionPad}>
           <div
             className={Style.ok}
-            onClick={inputKey(AndroidKeyCode.AndroidDPadCenter)}
+            onClick={press(AndroidKeyCode.AndroidDPadCenter)}
           >
             OK
           </div>
           <div
             className={Style.up}
-            onClick={inputKey(AndroidKeyCode.ArrowUp)}
+            onClick={press(AndroidKeyCode.ArrowUp)}
           />
           <div
             className={Style.right}
-            onClick={inputKey(AndroidKeyCode.ArrowRight)}
+            onClick={press(AndroidKeyCode.ArrowRight)}
           />
           <div
             className={Style.down}
-            onClick={inputKey(AndroidKeyCode.ArrowDown)}
+            onClick={press(AndroidKeyCode.ArrowDown)}
           />
           <div
             className={Style.left}
-            onClick={inputKey(AndroidKeyCode.ArrowLeft)}
+            onClick={press(AndroidKeyCode.ArrowLeft)}
           />
         </div>
+
         <div className={Style.bottom}>
           <div className={Style.button}>
             <span
               title={t('home')}
               className="icon-circle"
-              onClick={inputKey(AndroidKeyCode.AndroidHome)}
+              onClick={press(AndroidKeyCode.AndroidHome)}
             />
           </div>
           <div className={Style.button}>
             <span
               title={t('back')}
               className={className('icon-back', Style.back)}
-              onClick={inputKey(AndroidKeyCode.AndroidBack)}
+              onClick={press(AndroidKeyCode.AndroidBack)}
             />
           </div>
           <div className={Style.button}>
             <span
               title={t('appSwitch')}
               className="icon-square"
-              onClick={inputKey(AndroidKeyCode.AndroidAppSwitch)}
+              onClick={press(AndroidKeyCode.AndroidAppSwitch)}
             />
           </div>
         </div>

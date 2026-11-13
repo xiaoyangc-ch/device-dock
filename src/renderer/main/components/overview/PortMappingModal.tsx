@@ -1,3 +1,6 @@
+/**
+ * 端口映射：forward（主机 → 设备）与 reverse（设备 → 主机）两种方向。
+ */
 import { t } from 'common/util'
 import LunaModal from 'luna-modal/react'
 import { observer } from 'mobx-react-lite'
@@ -18,18 +21,19 @@ import { IModalProps } from 'share/common/types'
 import { notify } from 'share/renderer/lib/util'
 import { normalizePort } from '../../lib/util'
 
+const columns = [
+  { id: 'local', title: t('local'), sortable: true },
+  { id: 'remote', title: t('remote'), sortable: true },
+]
+
 export default observer(function PortMappingModal(props: IModalProps) {
-  const portForwarding = useRef(true)
+  // 方向用 ref：改变它不能触发重渲染，列表由 refresh 自己更新
+  const forwarding = useRef(true)
   const [local, setLocal] = useState('')
   const [remote, setRemote] = useState('')
-  const [data, setData] = useState<
-    {
-      local: string
-      remote: string
-    }[]
-  >([])
+  const [rows, setRows] = useState<{ local: string; remote: string }[]>([])
 
-  // 弹窗常驻挂载（LunaModal 会把 children 渲染进 portal），只在挂载时拉一次会一直显示旧数据
+  // 弹窗常驻挂载（children 渲染进 portal）：只在挂载时拉一次会一直显示旧数据
   useEffect(() => {
     if (props.visible) refresh()
   }, [props.visible])
@@ -37,15 +41,15 @@ export default observer(function PortMappingModal(props: IModalProps) {
   async function refresh() {
     try {
       if (!store.device) {
-        setData([])
-      } else if (portForwarding.current) {
-        setData(await main.listForwards(store.device.id))
+        setRows([])
+      } else if (forwarding.current) {
+        setRows(await main.listForwards(store.device.id))
       } else {
-        setData(await main.listReverses(store.device.id))
+        setRows(await main.listReverses(store.device.id))
       }
     } catch {
       // 设备离线：清空比留着上一次的端口列表更不容易误操作
-      setData([])
+      setRows([])
     }
   }
 
@@ -59,11 +63,11 @@ export default observer(function PortMappingModal(props: IModalProps) {
         <LunaToolbar className={Style.toolbar}>
           <LunaToolbarSelect
             keyName="portForwarding"
-            onChange={(val) => {
-              portForwarding.current = val === 'forward'
+            onChange={(value) => {
+              forwarding.current = value === 'forward'
               refresh()
             }}
-            value={portForwarding.current ? 'forward' : 'reverse'}
+            value={forwarding.current ? 'forward' : 'reverse'}
             options={{
               [t('portForwarding')]: 'forward',
               [t('portReversing')]: 'reverse',
@@ -74,26 +78,26 @@ export default observer(function PortMappingModal(props: IModalProps) {
             className={Style.local}
             value={local}
             placeholder={t('local')}
-            onChange={(val) => setLocal(val)}
+            onChange={setLocal}
           />
           <LunaToolbarInput
             keyName="remote"
             className={Style.remote}
             value={remote}
             placeholder={t('remote')}
-            onChange={(val) => setRemote(val)}
+            onChange={setRemote}
           />
           <LunaToolbarButton
             state="hover"
             disabled={isStrBlank(local) || isStrBlank(remote) || !store.device}
             onClick={async () => {
-              if (!store.device) {
-                return
-              }
+              if (!store.device) return
+
               const l = normalizePort(local)
               const r = normalizePort(remote)
               try {
-                if (portForwarding.current) {
+                // forward：主机端口 → 设备端口；reverse 的参数顺序反过来
+                if (forwarding.current) {
                   await main.forward(store.device.id, l, r)
                 } else {
                   await main.reverse(store.device.id, r, l)
@@ -117,7 +121,7 @@ export default observer(function PortMappingModal(props: IModalProps) {
         </LunaToolbar>
         <LunaDataGrid
           className={Style.grid}
-          data={data}
+          data={rows}
           minHeight={250}
           maxHeight={250}
           selectable={true}
@@ -128,16 +132,3 @@ export default observer(function PortMappingModal(props: IModalProps) {
     document.body
   )
 })
-
-const columns = [
-  {
-    id: 'local',
-    title: t('local'),
-    sortable: true,
-  },
-  {
-    id: 'remote',
-    title: t('remote'),
-    sortable: true,
-  },
-]
