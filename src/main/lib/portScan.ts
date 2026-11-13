@@ -1,10 +1,14 @@
+/**
+ * 单 IP 端口扫描：先扫 ADB 常用段，再全端口兜底，最后用 CNXN 握手确认是否真是 ADB。
+ *
+ * ADB over WiFi 默认 5555，改过端口的多落在 55xx / 75xx；只扫这些能一秒出结果，
+ * 扫不到再退到 1-65535——用户要的正是「端口不是默认的」这种场景。
+ */
 import net from 'node:net'
 import log from 'share/common/log'
 
 const logger = log('portScan')
 
-// ADB over WiFi 默认 5555；改过端口的多落在 55xx / 75xx，先扫这些让它一秒出结果，
-// 扫不到再退到全端口——用户要的就是"端口不一定是默认的"这种场景。
 const QUICK_RANGES: Array<[number, number]> = [
   [5550, 5600],
   [7500, 7600],
@@ -35,18 +39,24 @@ export interface PortScanResult {
   durationMs: number
 }
 
-// 每次扫描一个 token：取消只作用于当前这一次，避免两次扫描互相把对方的中断吞掉
+// 每次扫描一个 token：取消只作用于当前这次，两次扫描不会互相吞掉中断
 let activeScan: { cancelled: boolean } | null = null
 
 export function cancelPortScan() {
   if (activeScan) activeScan.cancelled = true
 }
 
+// ---------------------------------------------------------------------------
+// ADB 握手包
+// ---------------------------------------------------------------------------
+
 const CRC_TABLE = (() => {
   const table = new Int32Array(256)
   for (let n = 0; n < 256; n++) {
     let c = n
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    }
     table[n] = c
   }
   return table
@@ -76,6 +86,10 @@ export function adbPacket(
   return Buffer.concat([header, payload])
 }
 
+// ---------------------------------------------------------------------------
+// 探活
+// ---------------------------------------------------------------------------
+
 export function probePort(
   host: string,
   port: number,
@@ -84,22 +98,24 @@ export function probePort(
   return new Promise((resolve) => {
     let settled = false
     const socket = net.connect({ host, port })
-    const done = (ok: boolean) => {
+    const finish = (ok: boolean) => {
       if (settled) return
       settled = true
       socket.destroy()
       resolve(ok)
     }
     socket.setTimeout(timeout)
-    socket.once('connect', () => done(true))
-    socket.once('timeout', () => done(false))
-    socket.once('error', () => done(false))
-    socket.once('close', () => done(false))
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+    socket.once('close', () => finish(false))
   })
 }
 
-// 光看端口开着还不够——5555 也可能被别的服务占着。
-// 发一个 adb CNXN 握手包，只有回 CNXN（已授权）或 AUTH（待授权）才算 ADB。
+/**
+ * 端口开着不代表是 ADB：发一个 CNXN 握手，只有回 CNXN（已授权）或 AUTH（待授权）
+ * 才算。有些定制 adbd 直接关连接，这里会判 false，上层再用 adb connect 复核。
+ */
 export function probeAdbPort(
   host: string,
   port: number,
@@ -109,12 +125,13 @@ export function probeAdbPort(
     let settled = false
     let buffered = Buffer.alloc(0)
     const socket = net.connect({ host, port })
-    const done = (ok: boolean) => {
+    const finish = (ok: boolean) => {
       if (settled) return
       settled = true
       socket.destroy()
       resolve(ok)
     }
+
     socket.setTimeout(timeout)
     socket.once('connect', () => {
       socket.write(
@@ -126,13 +143,17 @@ export function probeAdbPort(
       buffered = Buffer.concat([buffered, chunk])
       if (buffered.length < 24) return
       const cmd = buffered.readUInt32LE(0)
-      done(cmd === A_CNXN || cmd === A_AUTH)
+      finish(cmd === A_CNXN || cmd === A_AUTH)
     })
-    socket.once('timeout', () => done(false))
-    socket.once('error', () => done(false))
-    socket.once('close', () => done(false))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+    socket.once('close', () => finish(false))
   })
 }
+
+// ---------------------------------------------------------------------------
+// 并发扫描
+// ---------------------------------------------------------------------------
 
 async function forEachLimit<T>(
   items: T[],
@@ -145,24 +166,23 @@ async function forEachLimit<T>(
     { length: Math.min(limit, items.length) },
     async () => {
       for (;;) {
-        // 取消后不用把剩下的几万个端口空转一遍：worker 直接退出
+        // 取消后不要让几万个端口空转：worker 直接退出
         if (signal?.cancelled) return
-        const i = next++
-        if (i >= items.length) return
-        await fn(items[i])
+        const index = next++
+        if (index >= items.length) return
+        await fn(items[index])
       }
     }
   )
   await Promise.all(workers)
 }
 
-function range(from: number, to: number): number[] {
+function range(from: number, to: number) {
   const ports: number[] = []
   for (let p = from; p <= to; p++) ports.push(p)
   return ports
 }
 
-// TCP 层探活，给定端口列表
 export async function scanPortsOf(
   host: string,
   ports: number[],
@@ -180,17 +200,22 @@ export async function scanPortsOf(
   let done = 0
   let lastReport = 0
 
-  await forEachLimit(ports, concurrency, async (port) => {
-    if (options.signal?.cancelled) return
-    const ok = await probePort(host, port, timeout)
-    if (ok) openPorts.push(port)
-    done++
-    const now = Date.now()
-    if (now - lastReport > 150 || done === ports.length) {
-      lastReport = now
-      report(done, ports.length)
-    }
-  }, options.signal)
+  await forEachLimit(
+    ports,
+    concurrency,
+    async (port) => {
+      if (options.signal?.cancelled) return
+      if (await probePort(host, port, timeout)) openPorts.push(port)
+      done++
+      // 进度 150ms 节流：几万个端口逐条 IPC 会把渲染层压死
+      const now = Date.now()
+      if (now - lastReport > 150 || done === ports.length) {
+        lastReport = now
+        report(done, ports.length)
+      }
+    },
+    options.signal
+  )
 
   return { openPorts: openPorts.sort((a, b) => a - b), scanned: done }
 }
@@ -209,6 +234,7 @@ export async function scanHostPorts(
   const started = Date.now()
   const timeout = options.timeout || DEFAULT_TIMEOUT
   const report = options.onProgress || (() => {})
+
   const openPorts = new Set<number>()
   let scanned = 0
 
@@ -217,27 +243,33 @@ export async function scanHostPorts(
     concurrency: number,
     phase: 'quick' | 'deep'
   ) => {
-    const r = await scanPortsOf(host, ports, {
+    const result = await scanPortsOf(host, ports, {
       timeout,
       concurrency,
       signal: scanToken,
       onProgress: (done, total) => report({ phase, done, total }),
     })
-    r.openPorts.forEach((p) => openPorts.add(p))
-    scanned += r.scanned
+    for (const port of result.openPorts) openPorts.add(port)
+    scanned += result.scanned
   }
 
-  const adbOf = async (ports: number[]) => {
-    // 开放端口可能有一堆（本机回环就有十几个），串行等超时太慢，几个并发探
+  const detectAdb = async (ports: number[]) => {
+    // 开放端口可能有一堆（本机回环就有十几个），串行等超时太慢
     const adbPorts: number[] = []
     const total = ports.length
     let done = 0
-    await forEachLimit(ports, 6, async (port) => {
-      if (isCancelled()) return
-      if (await probeAdbPort(host, port)) adbPorts.push(port)
-      done++
-      report({ phase: 'adb', done, total })
-    }, scanToken)
+
+    await forEachLimit(
+      ports,
+      6,
+      async (port) => {
+        if (isCancelled()) return
+        if (await probeAdbPort(host, port)) adbPorts.push(port)
+        done++
+        report({ phase: 'adb', done, total })
+      },
+      scanToken
+    )
     return adbPorts.sort((a, b) => a - b)
   }
 
@@ -248,17 +280,19 @@ export async function scanHostPorts(
     await scan(quickPorts, QUICK_CONCURRENCY, 'quick')
     let adbPorts = isCancelled()
       ? []
-      : await adbOf([...openPorts].sort((a, b) => a - b))
+      : await detectAdb([...openPorts].sort((a, b) => a - b))
 
-    // 常用段没有 ADB：整段 1-65535 兜底（跳过已经扫过的）
+    // 常用段没有 ADB：全端口兜底（跳过已扫过的）
     if (!isCancelled() && !adbPorts.length && options.deep !== false) {
-      const quick = new Set(quickPorts)
+      const already = new Set(quickPorts)
       const rest: number[] = []
-      for (let p = 1; p <= 65535; p++) if (!quick.has(p)) rest.push(p)
+      for (let p = 1; p <= 65535; p++) {
+        if (!already.has(p)) rest.push(p)
+      }
       await scan(rest, DEEP_CONCURRENCY, 'deep')
       adbPorts = isCancelled()
         ? []
-        : await adbOf([...openPorts].sort((a, b) => a - b))
+        : await detectAdb([...openPorts].sort((a, b) => a - b))
     }
 
     const result: PortScanResult = {
@@ -278,7 +312,6 @@ export async function scanHostPorts(
       cancelled: result.cancelled,
       durationMs: result.durationMs,
     })
-
     return result
   } finally {
     if (activeScan === scanToken) activeScan = null
