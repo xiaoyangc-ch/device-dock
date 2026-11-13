@@ -1,16 +1,17 @@
-.container {
+.previewArea {
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  :global(.luna-image-viewer) {
-    background-color: transparent;
-    width: 100%;
-    height: 100%;
-  }
 }
 
-.no-preview {
+.previewArea :global(.luna-image-viewer) {
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+}
+
+.previewEmpty {
   width: 100%;
   height: 100%;
   display: flex;
@@ -18,40 +19,43 @@
   justify-content: center;
 }
 
-.video-player {
+.videoViewport {
   width: 100%;
   height: 100%;
 }
 
-.music-player-container {
+/* 音频：波形在上，播放条在下 */
+.audioStack {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
 }
 
-.music-visualizer {
+.audioWave {
   flex: 1;
 }
 
-.music-player {
+.audioBar {
   width: 100%;
-  :global(.luna-music-player-body) {
-    border: none;
-  }
-  :global(.luna-music-player-icon-file) {
-    display: none;
-  }
 }
 
-.text-viewer {
-  height: 100%;
-  width: 100%;
+.audioBar :global(.luna-music-player-body) {
   border: none;
 }
 
-.pdf-viewer {
-  height: 100%;
+.audioBar :global(.luna-music-player-icon-file) {
+  display: none;
+}
+
+.textFrame {
   width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.pdfFrame {
+  width: 100%;
+  height: 100%;
   border: none;
 }

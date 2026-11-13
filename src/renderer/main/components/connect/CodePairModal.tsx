@@ -52,8 +52,8 @@ export default function CodePairModal(props: IModalProps) {
         <Input title={t('ipAddress')} value={ip} onChange={setIp} />
         <Input title={t('port')} value={port} onChange={setPort} />
       </Row>
-      <div className={Style.pairingCode}>
-        <div className={Style.pairingCodeTitle}>{t('pairingCode')}</div>
+      <div className={Style.pairCode}>
+        <div className={Style.pairCodeLabel}>{t('pairingCode')}</div>
         <LunaOtpInput
           onChange={(code) => {
             setPassword(code)
@@ -66,7 +66,7 @@ export default function CodePairModal(props: IModalProps) {
         })}
         onClick={pair}
       >
-        {isPairing ? <LoadingCircle className={Style.loading} /> : t('pair')}
+        {isPairing ? <LoadingCircle className={Style.pairSpinner} /> : t('pair')}
       </div>
     </LunaModal>,
     document.body

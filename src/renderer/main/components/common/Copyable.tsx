@@ -24,7 +24,7 @@ export const Copyable: FC<PropsWithChildren<IProps>> = function (props) {
 
   return (
     <div
-      className={className(props.className, Style.container)}
+      className={className(props.className, Style.copyText)}
       ref={valueRef}
       onClick={copyValue}
     >

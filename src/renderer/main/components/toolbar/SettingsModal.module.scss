@@ -1,6 +1,5 @@
-.settings {
-  :global(.luna-setting-item) {
-    padding-left: 0;
-    padding-right: 0;
-  }
+/* 设置弹窗：luna-setting 自带左右内边距，这里贴边 */
+.settingsPanel :global(.luna-setting-item) {
+  padding-left: 0;
+  padding-right: 0;
 }

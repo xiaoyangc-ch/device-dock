@@ -1,8 +1,9 @@
-.container {
+.copyText {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  &:hover {
-    color: var(--color-primary);
-  }
+}
+
+.copyText:hover {
+  color: var(--color-primary);
 }

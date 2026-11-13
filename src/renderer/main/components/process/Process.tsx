@@ -203,7 +203,7 @@ export default observer(function Process() {
           onSelect={(node) => setSelected((node as any).data)}
           onDeselect={() => setSelected(null)}
           filter={filter}
-          className={Style.processes}
+          className={Style.deviceProcessTable}
           data={processes}
           columns={columns}
           selectable={true}

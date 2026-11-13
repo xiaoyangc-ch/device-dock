@@ -28,30 +28,30 @@ export default function Preview(props: IProps) {
   const [audio, setAudio] = useState<HTMLAudioElement>(new Audio())
 
   let preview: JSX.Element = (
-    <div className={Style.noPreview}>{t('noPreview')}</div>
+    <div className={Style.previewEmpty}>{t('noPreview')}</div>
   )
 
   if (!file) {
-    preview = <div className={Style.noPreview}>{t('fileNotSelected')}</div>
+    preview = <div className={Style.previewEmpty}>{t('fileNotSelected')}</div>
   } else if (!file.directory && url && file.mime) {
     const mime = file.mime
 
     if (mime === 'application/pdf') {
-      preview = <iframe className={Style.pdfViewer} src={url} />
+      preview = <iframe className={Style.pdfFrame} src={url} />
     } else if (startWith(mime, 'image/')) {
       preview = <LunaImageViewer image={url} />
     } else if (startWith(mime, 'video/')) {
-      preview = <LunaVideoPlayer className={Style.videoPlayer} url={url} />
+      preview = <LunaVideoPlayer className={Style.videoViewport} url={url} />
     } else if (startWith(mime, 'audio/')) {
       preview = (
-        <div className={Style.musicPlayerContainer}>
+        <div className={Style.audioStack}>
           <LunaMusicVisualizer
-            className={Style.musicVisualizer}
+            className={Style.audioWave}
             audio={audio}
             fftSize={256}
           />
           <LunaMusicPlayer
-            className={Style.musicPlayer}
+            className={Style.audioBar}
             audio={{ title: file.name, url }}
             onCreate={(player) => setAudio(player.getAudio())}
           />
@@ -62,7 +62,7 @@ export default function Preview(props: IProps) {
     }
   }
 
-  return <div className={Style.container}>{preview}</div>
+  return <div className={Style.previewArea}>{preview}</div>
 }
 
 function TextViewer(props: { url: string }) {
@@ -97,5 +97,5 @@ function TextViewer(props: { url: string }) {
     }
   }, [props.url])
 
-  return <LunaTextViewer text={text} className={Style.textViewer} />
+  return <LunaTextViewer text={text} className={Style.textFrame} />
 }

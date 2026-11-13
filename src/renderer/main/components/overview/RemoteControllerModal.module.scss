@@ -1,6 +1,7 @@
 @use '../../../theme' as *;
 
-.remote-controller {
+/* 遥控器：上排功能键、中间圆盘、下排导航键 */
+.remotePad {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -10,106 +11,119 @@
   background: var(--color-bg-container-darker);
 }
 
-.top,
-.bottom {
+.remoteRowTop,
+.remoteRowBottom {
   display: flex;
   width: 100%;
   padding: #{$padding}px;
 }
 
-.button {
+.remoteKey {
   flex: 1;
   display: flex;
   justify-content: center;
-  span {
-    display: block;
-    width: 50px;
-    height: 50px;
-    background: var(--color-fill-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    &:active {
-      background: var(--color-fill-tertiary);
-    }
-  }
-  .back {
-    width: 100px;
-    border-radius: 50px;
-  }
 }
 
-.direction-pad {
-  width: 200px;
-  height: 200px;
-  background: var(--color-fill-secondary);
-  border-radius: 50%;
-  overflow: hidden;
-  position: relative;
-}
-
-.up,
-.right,
-.down,
-.left {
-  position: absolute;
-  width: 50%;
-  height: 50%;
-  &:active {
-    background: var(--color-fill-tertiary);
-  }
-  &:after {
-    content: '';
-    position: absolute;
-    width: 5px;
-    height: 5px;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    border-radius: 50%;
-    background: var(--color-text);
-  }
-}
-
-.ok {
-  position: absolute;
-  width: 50%;
-  height: 50%;
-  border-radius: 50%;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  background: var(--color-bg-container);
-  z-index: 10;
+.remoteKey span {
+  width: 50px;
+  height: 50px;
   display: flex;
   align-items: center;
   justify-content: center;
-  &:active {
-    background: var(--color-bg-container-darker);
-  }
+  border-radius: 50%;
+  background: var(--color-fill-secondary);
 }
 
-.up {
+.remoteKey span:active {
+  background: var(--color-fill-tertiary);
+}
+
+/* 返回键做成胶囊：和两侧圆形键区分开 */
+.remoteKey .remoteBack {
+  width: 100px;
+  border-radius: 50px;
+}
+
+.remoteDpad {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--color-fill-secondary);
+}
+
+.dpadUp,
+.dpadRight,
+.dpadDown,
+.dpadLeft {
+  position: absolute;
+  width: 50%;
+  height: 50%;
+}
+
+.dpadUp:active,
+.dpadRight:active,
+.dpadDown:active,
+.dpadLeft:active {
+  background: var(--color-fill-tertiary);
+}
+
+.dpadUp::after,
+.dpadRight::after,
+.dpadDown::after,
+.dpadLeft::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--color-text);
+}
+
+/* 四个方向都是旋转 45° 的方块，中心留出 OK 的位置 */
+.dpadUp {
   bottom: 50%;
   left: 50%;
   transform: translate(-50%, -20%) rotate(45deg);
 }
 
-.right {
+.dpadRight {
   top: 50%;
   left: 50%;
   transform: translate(20%, -50%) rotate(45deg);
 }
 
-.down {
+.dpadDown {
   top: 50%;
   left: 50%;
   transform: translate(-50%, 20%) rotate(45deg);
 }
 
-.left {
+.dpadLeft {
   top: 50%;
   right: 50%;
   transform: translate(-20%, -50%) rotate(45deg);
+}
+
+.dpadCenter {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 10;
+  width: 50%;
+  height: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--color-bg-container);
+}
+
+.dpadCenter:active {
+  background: var(--color-bg-container-darker);
 }

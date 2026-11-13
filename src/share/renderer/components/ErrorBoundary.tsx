@@ -24,11 +24,11 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children
 
     return (
-      <div className={Style.container}>
-        <div className={Style.title}>此页面出错</div>
-        <div className={Style.detail}>{String(error.message || error)}</div>
+      <div className={Style.crashPanel}>
+        <div className={Style.crashTitle}>此页面出错</div>
+        <div className={Style.crashDetail}>{String(error.message || error)}</div>
         <button
-          className={Style.retry}
+          className={Style.crashRetry}
           onClick={() => this.setState({ error: null })}
         >
           重试

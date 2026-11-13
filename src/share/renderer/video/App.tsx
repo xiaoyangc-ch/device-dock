@@ -6,7 +6,7 @@ import Style from './App.module.scss'
 export default observer(function App() {
   return (
     <LunaVideoPlayer
-      className={Style.videoPlayer}
+      className={Style.videoStage}
       url={store.url}
       onCreate={(videoPlayer) => {
         videoPlayer.on('canplay', () => videoPlayer.play())

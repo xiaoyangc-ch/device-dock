@@ -37,7 +37,7 @@ export default function ToolbarIcon(props: PropsWithChildren<IProps>) {
 
   return (
     <span
-      className={Style.wrap}
+      className={Style.tipAnchor}
       onMouseEnter={hover}
       onMouseLeave={hide}
       onMouseDown={hide}
@@ -54,7 +54,7 @@ export default function ToolbarIcon(props: PropsWithChildren<IProps>) {
       </LunaToolbarButton>
       {tip &&
         createPortal(
-          <div className={Style.tip} style={{ left: tip.x, top: tip.y }}>
+          <div className={Style.tipBubble} style={{ left: tip.x, top: tip.y }}>
             {props.title}
           </div>,
           document.body

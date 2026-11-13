@@ -1,26 +1,25 @@
-.container {
+/* 表格上方压一条工具栏，容器用 padding-top 给它留位 */
+.portMapBody {
   position: relative;
   width: 100%;
   padding-top: 30px;
   border: 1px solid var(--color-border);
 }
 
-.toolbar {
-  background: var(--color-bg-container);
+.portMapToolbar {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 10;
   width: 100%;
+  z-index: 10;
+  background: var(--color-bg-container);
 }
 
-.local,
-.remote {
-  input {
-    width: 100px;
-  }
+.portLocal input,
+.portRemote input {
+  width: 100px;
 }
 
-.grid {
+.portMapGrid {
   border: none !important;
 }

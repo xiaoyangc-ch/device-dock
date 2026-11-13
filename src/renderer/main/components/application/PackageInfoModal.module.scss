@@ -1,51 +1,52 @@
 @use '../../../theme' as theme;
 
-.header {
+.pkgHeader {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   margin-bottom: #{theme.$margin-m-d}px;
 }
 
-.icon {
+.pkgIcon {
   width: 80px;
   height: 80px;
-  border-radius: 20%;
-  overflow: hidden;
-  font-size: 0;
   margin-right: 12px;
-  img {
-    width: 100%;
-  }
+  overflow: hidden;
+  border-radius: 20%;
+  font-size: 0;
 }
 
-.basic {
+.pkgIcon img {
+  width: 100%;
+}
+
+.pkgBasic {
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
 }
 
-.label,
-.package-name,
-.version-name {
+.pkgTitle,
+.pkgName,
+.pkgVersion {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.label {
-  font-size: #{theme.$font-size-l-g}px;
+.pkgTitle {
   margin-bottom: #{theme.$margin-s-m}px;
+  font-size: #{theme.$font-size-l-g}px;
 }
 
-.package-name,
-.version-name {
-  opacity: 0.8;
+.pkgName,
+.pkgVersion {
   margin-bottom: #{theme.$margin-x-x-s}px;
   font-size: #{theme.$font-size}px;
+  opacity: 0.8;
 }
 
-.item {
+.pkgRow {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
@@ -53,15 +54,15 @@
   padding: #{theme.$padding-x-s}px 0;
 }
 
-.item + .item {
+.pkgRow + .pkgRow {
   border-top: 1px solid var(--color-border);
 }
 
-.value {
+.pkgValue {
   flex: 1;
-  white-space: nowrap;
-  text-align: right;
+  padding-left: 20px;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-left: 20px;
+  white-space: nowrap;
+  text-align: right;
 }

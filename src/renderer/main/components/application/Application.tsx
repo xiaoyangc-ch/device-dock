@@ -482,7 +482,7 @@ export default observer(function Application() {
 
   const applications = (
     <div
-      className={Style.applications}
+      className={Style.appView}
       style={{
         overflowY: store.application.listView ? 'hidden' : 'auto',
       }}
@@ -578,8 +578,8 @@ export default observer(function Application() {
       )}
       <div
         className={className({
-          [Style.openEffect]: true,
-          [Style.openEffectAnimation]: openAnimating,
+          [Style.appOpenRipple]: true,
+          [Style.appOpenRippleRun]: openAnimating,
         })}
         style={openEffectStyle}
         onAnimationEnd={() => setOpenAnimating(false)}
@@ -681,8 +681,8 @@ export default observer(function Application() {
         />
       </PageToolbar>
       <div
-        className={className(Style.body, {
-          [Style.highlight]: dropHighlight,
+        className={className(Style.appPane, {
+          [Style.appDropActive]: dropHighlight,
         })}
       >
         {isLoading && isEmpty(packageInfos) ? <PannelLoading /> : applications}

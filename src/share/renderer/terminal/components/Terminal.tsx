@@ -115,9 +115,9 @@ export default observer(function () {
   }
 
   return (
-    <div className={Style.terminalContainer}>
+    <div className={Style.logConsole}>
       <div
-        className={Style.terminal}
+        className={Style.logScreen}
         ref={containerRef}
         onContextMenu={onContextMenu}
       />

@@ -1,8 +1,9 @@
-.container {
-  background: var(--color-bg-container);
+/* 工具栏压在表格上方的绝对定位条 */
+.processToolbar {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 10;
   width: 100%;
+  z-index: 10;
+  background: var(--color-bg-container);
 }

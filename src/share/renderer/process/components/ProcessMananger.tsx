@@ -60,9 +60,9 @@ export default observer(function ProcessManager() {
   }))
 
   return (
-    <div className={Style.container} ref={containerRef}>
+    <div className={Style.processTableWrap} ref={containerRef}>
       <LunaDataGrid
-        className={Style.processes}
+        className={Style.processTable}
         onSelect={(node) => store.select((node as any).data)}
         onDeselect={() => store.select(null)}
         filter={store.filter}

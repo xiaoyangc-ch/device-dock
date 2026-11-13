@@ -313,9 +313,9 @@ export default observer(function ConnectPage() {
           onClick={() => selected && disconnect(selected.id)}
         />
       </PageToolbar>
-      <div className={Style.body} ref={wrapRef}>
+      <div className={Style.connectPane} ref={wrapRef}>
         <LunaDataGrid
-          className={Style.grid}
+          className={Style.connectGrid}
           columns={columns}
           data={devices}
           filter={filter}
@@ -339,9 +339,9 @@ export default observer(function ConnectPage() {
           }}
         />
         {isEmpty(devices) && (
-          <div className={Style.empty}>
-            <div className={Style.emptyTitle}>{t('connectEmptyTitle')}</div>
-            <div className={Style.emptyHint}>{t('connectEmptyHint')}</div>
+          <div className={Style.connectEmpty}>
+            <div className={Style.connectEmptyTitle}>{t('connectEmptyTitle')}</div>
+            <div className={Style.connectEmptyHint}>{t('connectEmptyHint')}</div>
           </div>
         )}
       </div>

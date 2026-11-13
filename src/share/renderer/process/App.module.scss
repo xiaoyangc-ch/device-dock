@@ -1,4 +1,5 @@
-.split-pane {
+/* 上表格下图表，中间的拖动条由 luna-split-pane 自己画 */
+.processSplit {
   position: absolute;
   top: 30px;
   left: 0;

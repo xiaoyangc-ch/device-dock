@@ -19,20 +19,20 @@ const CHANGES = [
 
 export default function App() {
   return (
-    <div className={Style.container}>
+    <div className={Style.aboutShell}>
       <img src={icon} />
       <div>
         {PRODUCT_NAME} {VERSION}
       </div>
-      <div className={Style.changes}>
-        <div className={Style.changesTitle}>更新内容</div>
+      <div className={Style.releaseNotes}>
+        <div className={Style.releaseNotesTitle}>更新内容</div>
         {CHANGES.map((item, index) => (
-          <div key={index} className={Style.item}>
+          <div key={index} className={Style.releaseNotesItem}>
             {item}
           </div>
         ))}
       </div>
-      <div className={Style.src}>
+      <div className={Style.licenseLine}>
         设备坞 4.0 · 自有实现 · 第三方组件见 NOTICE
       </div>
     </div>

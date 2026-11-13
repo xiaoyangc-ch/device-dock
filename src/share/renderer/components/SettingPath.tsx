@@ -26,7 +26,7 @@ export default function SettingPath(props: IProps) {
 
   return (
     <LunaSettingHtml>
-      <div className={Style.itemPath}>
+      <div className={Style.pathField}>
         <div className="luna-setting-title">{props.title}</div>
         <div className="luna-setting-description"></div>
         <div className="luna-setting-control">

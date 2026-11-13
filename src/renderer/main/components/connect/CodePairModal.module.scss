@@ -1,18 +1,19 @@
-.pairing-code {
+.pairCode {
   margin: 10px 0;
 }
 
-.pairing-code-title {
-  line-height: 1.4em;
-  font-weight: 600;
+.pairCodeLabel {
   margin-bottom: 8px;
+  font-weight: 600;
+  line-height: 1.4em;
 }
 
-.loading {
+.pairSpinner {
   width: 16px;
   height: 16px;
   transform: scale(1.8, 1.8);
-  path {
-    fill: #fff;
-  }
+}
+
+.pairSpinner path {
+  fill: #fff;
 }

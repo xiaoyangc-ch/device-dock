@@ -41,7 +41,7 @@ export default observer(function Graph() {
   const color = store.theme === 'dark' ? colorPrimaryDark : colorPrimary
 
   return (
-    <div className={Style.container}>
+    <div className={Style.graphPane}>
       <LunaPerformanceMonitor
         title="CPU"
         data={cpuData}

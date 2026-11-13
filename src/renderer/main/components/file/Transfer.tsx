@@ -22,15 +22,15 @@ export default observer(function Transfer() {
   const transfers = store.file.transfers
 
   if (!transfers.length) {
-    return <div className={Style.empty}>{t('transferEmpty')}</div>
+    return <div className={Style.transferEmpty}>{t('transferEmpty')}</div>
   }
 
   return (
-    <div className={Style.container}>
+    <div className={Style.transferList}>
       {transfers.some((item) => item.done) ? (
-        <div className={Style.headBar}>
+        <div className={Style.transferToolbar}>
           <button
-            className={Style.clearBtn}
+            className={Style.transferClear}
             onClick={() => store.file.clearDone()}
           >
             {t('transferClearDone')}
@@ -47,43 +47,43 @@ export default observer(function Transfer() {
         const isDown = item.type === TransferType.Download
 
         return (
-          <div key={item.id} className={Style.row}>
-            <div className={Style.head}>
-              <span className={Style.name} title={item.src}>
+          <div key={item.id} className={Style.transferCard}>
+            <div className={Style.transferCardHead}>
+              <span className={Style.transferName} title={item.src}>
                 {item.name}
               </span>
               <span
                 className={
-                  Style.tag + ' ' + (isDown ? Style.down : Style.up)
+                  Style.transferBadge + ' ' + (isDown ? Style.transferBadgeDown : Style.transferBadgeUp)
                 }
               >
                 {isDown ? t('download') : t('upload')}
               </span>
-              <span className={Style.meta}>
+              <span className={Style.transferMeta}>
                 {fileSize(item.transferred)}/{fileSize(item.size)} · {percent}%
                 {!item.done && item.speed > 0
                   ? ` · ${fileSize(item.speed)}/s`
                   : ''}
               </span>
             </div>
-            <div className={Style.barWrap}>
+            <div className={Style.transferBarTrack}>
               <div
                 className={
-                  Style.bar +
+                  Style.transferBar +
                   (item.done
                     ? item.ok
-                      ? ' ' + Style.barOk
-                      : ' ' + Style.barErr
+                      ? ' ' + Style.transferBarDone
+                      : ' ' + Style.transferBarFail
                     : '')
                 }
                 style={{ width: percent + '%' }}
               />
             </div>
-            <div className={Style.foot}>
-              <span className={Style.path} title={item.dest}>
+            <div className={Style.transferFoot}>
+              <span className={Style.transferDest} title={item.dest}>
                 {item.dest}
               </span>
-              <span className={item.done && !item.ok ? Style.errText : ''}>
+              <span className={item.done && !item.ok ? Style.transferError : ''}>
                 {item.done
                   ? item.ok
                     ? t('transferDone')

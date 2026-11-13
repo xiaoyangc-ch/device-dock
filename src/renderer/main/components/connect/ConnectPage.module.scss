@@ -1,4 +1,4 @@
-.body {
+.connectPane {
   flex: 1;
   min-height: 0;
   position: relative;
@@ -7,16 +7,16 @@
   overflow: hidden;
 }
 
-.grid {
+.connectGrid {
   flex: 1;
   min-height: 0;
-
-  :global(.luna-data-grid) {
-    border: none !important;
-  }
 }
 
-.empty {
+.connectGrid :global(.luna-data-grid) {
+  border: none !important;
+}
+
+.connectEmpty {
   position: absolute;
   inset: 0;
   display: flex;
@@ -28,11 +28,11 @@
   color: var(--color-text-secondary);
 }
 
-.emptyTitle {
+.connectEmptyTitle {
   font-size: 14px;
   color: var(--color-text);
 }
 
-.emptyHint {
+.connectEmptyHint {
   font-size: 12px;
 }

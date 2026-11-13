@@ -1,22 +1,25 @@
-.item-path {
+/* 路径字段：输入框 + 浏览按钮拼成一条 */
+.pathField {
   padding: 10px 0;
   width: 100%;
-  input {
-    color: var(--color-text);
-    background: var(--color-bg-container);
-    border: 1px solid var(--color-border, transparent);
-    min-width: 300px;
-    border-right: none;
-    padding: 4px 6px;
-    outline: none;
-    height: 25px;
-  }
-  :global(.button) {
-    height: 25px;
-    line-height: 25px;
-    padding: 0 14px;
-    font-size: 12px;
-    margin: 0;
-    border-radius: 0;
-  }
+}
+
+.pathField input {
+  height: 25px;
+  padding: 4px 6px;
+  min-width: 300px;
+  outline: none;
+  color: var(--color-text);
+  border: 1px solid var(--color-border, transparent);
+  border-right: none;
+  background: var(--color-bg-container);
+}
+
+.pathField :global(.button) {
+  height: 25px;
+  line-height: 25px;
+  margin: 0;
+  padding: 0 14px;
+  font-size: 12px;
+  border-radius: 0;
 }

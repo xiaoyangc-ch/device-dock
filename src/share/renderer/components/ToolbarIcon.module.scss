@@ -1,19 +1,20 @@
-.wrap {
+/* 工具栏图标：外层负责 hover 计时，气泡挂到 body 上避免被裁切 */
+.tipAnchor {
   display: inline-flex;
 }
 
-.tip {
+.tipBubble {
   position: fixed;
   transform: translateX(-50%);
   padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9999;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   background: var(--color-bg-container-lighter);
   box-shadow: var(--box-shadow);
-  font-size: 12px;
-  line-height: 1.4;
   color: var(--color-text);
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 9999;
 }

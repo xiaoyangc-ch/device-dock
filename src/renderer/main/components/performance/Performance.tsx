@@ -169,19 +169,19 @@ export default observer(function Performance() {
           {t('uptime')} {durationFormat(uptime, 'd:hh:mm:ss')}
         </ToolText>
         <ToolSpace />
-        <div className={Style.batteryContainer}>
-          <span className={Style.batteryInfo}>{batteryInfo}</span>
-          <span className={Style.batteryLevel}>{batteryLevel}</span>
-          <div className={Style.battery}>
-            <div className={Style.batteryHead} />
+        <div className={Style.perfBattery}>
+          <span className={Style.batteryMeta}>{batteryInfo}</span>
+          <span className={Style.batteryPercent}>{batteryLevel}</span>
+          <div className={Style.batteryGauge}>
+            <div className={Style.batteryTip} />
             <div
-              className={Style.batteryInside}
+              className={Style.batteryFill}
               style={{ width: batteryLevel }}
             />
           </div>
         </div>
       </PageToolbar>
-      <PageBody className={Style.charts}>
+      <PageBody className={Style.perfScroll}>
         <LunaPerformanceMonitor
           title={
             data.cpuTemperature > 0
@@ -195,7 +195,7 @@ export default observer(function Performance() {
           height={80}
           unit="%"
         />
-        <div className={Style.cpuContainer}>
+        <div className={Style.perfCpuGrid}>
           {data.cpuLoads.map((_load, index) => (
             <Cpu key={index} index={index} dataRef={dataRef} />
           ))}

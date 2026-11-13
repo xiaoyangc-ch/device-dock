@@ -41,7 +41,7 @@ export default observer(function Toolbar() {
     : false
 
   return (
-    <LunaToolbar className={Style.container}>
+    <LunaToolbar className={Style.processToolbar}>
       <LunaToolbarInput
         keyName="filter"
         value={store.filter}

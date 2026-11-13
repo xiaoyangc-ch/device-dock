@@ -18,9 +18,9 @@ const DATE_FORMAT = 'yyyy-mm-dd HH:MM:ss'
 
 function item(title: string, value: string | number) {
   return (
-    <div className={Style.item}>
+    <div className={Style.pkgRow}>
       <span>{title}</span>
-      <Copyable className={Style.value}>{value}</Copyable>
+      <Copyable className={Style.pkgValue}>{value}</Copyable>
     </div>
   )
 }
@@ -36,16 +36,16 @@ export default function PackageInfoModal(props: IProps) {
       width={400}
       onClose={props.onClose}
     >
-      <div className={Style.header}>
-        <div className={Style.icon}>
+      <div className={Style.pkgHeader}>
+        <div className={Style.pkgIcon}>
           <img src={packageInfo.icon || defaultIcon} />
         </div>
-        <div className={Style.basic}>
-          <div className={Style.label}>{packageInfo.label}</div>
-          <Copyable className={Style.packageName}>
+        <div className={Style.pkgBasic}>
+          <div className={Style.pkgTitle}>{packageInfo.label}</div>
+          <Copyable className={Style.pkgName}>
             {packageInfo.packageName}
           </Copyable>
-          <Copyable className={Style.versionName}>
+          <Copyable className={Style.pkgVersion}>
             {packageInfo.versionName}
           </Copyable>
         </div>

@@ -26,23 +26,23 @@ export default observer(function RemoteControllerModal(props: IModalProps) {
       visible={props.visible}
       onClose={props.onClose}
     >
-      <div className={Style.remoteController}>
-        <div className={Style.top}>
-          <div className={Style.button}>
+      <div className={Style.remotePad}>
+        <div className={Style.remoteRowTop}>
+          <div className={Style.remoteKey}>
             <span
               className="icon-power"
               title={t('power')}
               onClick={press(AndroidKeyCode.Power)}
             />
           </div>
-          <div className={Style.button}>
+          <div className={Style.remoteKey}>
             <span
               title={t('volumeDown')}
               className="icon-volume-down"
               onClick={press(AndroidKeyCode.VolumeDown)}
             />
           </div>
-          <div className={Style.button}>
+          <div className={Style.remoteKey}>
             <span
               className="icon-volume"
               title={t('volumeUp')}
@@ -51,47 +51,47 @@ export default observer(function RemoteControllerModal(props: IModalProps) {
           </div>
         </div>
 
-        <div className={Style.directionPad}>
+        <div className={Style.remoteDpad}>
           <div
-            className={Style.ok}
+            className={Style.dpadCenter}
             onClick={press(AndroidKeyCode.AndroidDPadCenter)}
           >
             OK
           </div>
           <div
-            className={Style.up}
+            className={Style.dpadUp}
             onClick={press(AndroidKeyCode.ArrowUp)}
           />
           <div
-            className={Style.right}
+            className={Style.dpadRight}
             onClick={press(AndroidKeyCode.ArrowRight)}
           />
           <div
-            className={Style.down}
+            className={Style.dpadDown}
             onClick={press(AndroidKeyCode.ArrowDown)}
           />
           <div
-            className={Style.left}
+            className={Style.dpadLeft}
             onClick={press(AndroidKeyCode.ArrowLeft)}
           />
         </div>
 
-        <div className={Style.bottom}>
-          <div className={Style.button}>
+        <div className={Style.remoteRowBottom}>
+          <div className={Style.remoteKey}>
             <span
               title={t('home')}
               className="icon-circle"
               onClick={press(AndroidKeyCode.AndroidHome)}
             />
           </div>
-          <div className={Style.button}>
+          <div className={Style.remoteKey}>
             <span
               title={t('back')}
-              className={className('icon-back', Style.back)}
+              className={className('icon-back', Style.remoteBack)}
               onClick={press(AndroidKeyCode.AndroidBack)}
             />
           </div>
-          <div className={Style.button}>
+          <div className={Style.remoteKey}>
             <span
               title={t('appSwitch')}
               className="icon-square"

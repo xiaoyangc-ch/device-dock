@@ -9,7 +9,7 @@ export default function App() {
   return (
     <>
       <Toolbar />
-      <div className={Style.splitPane}>
+      <div className={Style.processSplit}>
         <LunaSplitPane direction="vertical">
           <LunaSplitPaneItem minSize={100} weight={50}>
             <ProcessMananger />

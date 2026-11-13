@@ -1,118 +1,128 @@
 @use '../../../renderer/theme' as *;
 
-@mixin input() {
+/* 设置面板的字段行：数字 / 滑块 / 文本框共用一套骨架 */
+
+@mixin field-input() {
   -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
-  color: var(--color-text);
   appearance: none;
-  border: 1px solid var(--color-border);
   outline: none;
-  padding: 2px 8px;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 0;
+  padding: 2px 8px;
   font-size: 14px;
   font-family: var(--font-family);
   background: var(--color-bg-container);
 }
 
-.row {
-  padding: 0px 8px;
-  margin: 10px 0;
+.settingFormRow {
   display: flex;
   gap: 10px;
+  padding: 0 8px;
+  margin: 10px 0;
   position: relative;
 }
 
-.item {
+.settingField {
   flex-grow: 1;
   flex-basis: 0;
-  .title {
-    line-height: 1.4em;
-    font-weight: 600;
-    margin-bottom: 8px;
-  }
-  .control {
-    display: flex;
-    align-items: center;
-    font-size: 12px;
-  }
 }
 
-.item-number {
+.settingLabel {
+  margin-bottom: 8px;
+  font-weight: 600;
+  line-height: 1.4em;
+}
+
+.settingControl {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+
+/* ---- 数字字段 ---- */
+
+.settingNumberField {
   position: relative;
-  input[type='number'] {
-    @include input();
-    padding: 2px;
-    width: 100%;
-  }
-  .control {
-    height: 20px;
-  }
-  .range-value {
-    position: absolute;
-    right: 0;
-    top: 2px;
-  }
-  .range-container {
-    flex: 2;
-    position: relative;
-    top: 1px;
-    .range-track {
-      height: 4px;
-      width: 100%;
-      padding: 0;
-      position: absolute;
-      left: 0;
-      top: 4px;
-      .range-track-bar {
-        background: var(--color-border);
-        border-radius: 2px;
-        overflow: hidden;
-        width: 100%;
-        height: 4px;
-        .range-track-progress {
-          height: 100%;
-          background: var(--color-primary);
-          width: 50%;
-        }
-      }
-    }
-    input {
-      -webkit-appearance: none;
-      background: transparent;
-      height: 4px;
-      width: 100%;
-      position: relative;
-      top: -3px;
-      margin: 0 auto;
-      outline: none;
-      border-radius: 2px;
-    }
-    input::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      position: relative;
-      z-index: 1;
-      width: 12px;
-      border: none;
-      height: 12px;
-      border-radius: 10px;
-      border: 1px solid var(--color-border);
-      background: var(--color-white);
-    }
-  }
 }
 
-:global(.platform-windows) {
-  .item-number {
-    .range-container {
-      .range-track {
-        top: 6px;
-      }
-    }
-  }
+.settingNumberField input[type='number'] {
+  @include field-input();
+  width: 100%;
+  padding: 2px;
 }
 
-.item-input {
-  input {
-    @include input();
-    width: 100%;
-  }
+.settingNumberField .settingControl {
+  height: 20px;
+}
+
+.settingRangeValue {
+  position: absolute;
+  top: 2px;
+  right: 0;
+}
+
+.settingRange {
+  flex: 2;
+  position: relative;
+  top: 1px;
+}
+
+.settingRangeTrack {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 100%;
+  height: 4px;
+  padding: 0;
+}
+
+.settingRangeBar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--color-border);
+}
+
+.settingRangeFill {
+  height: 100%;
+  width: 50%;
+  background: var(--color-primary);
+}
+
+.settingRange input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  top: -3px;
+  width: 100%;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 2px;
+  outline: none;
+  background: transparent;
+}
+
+.settingRange input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-white);
+}
+
+:global(.platform-windows) .settingRange .settingRangeTrack {
+  top: 6px;
+}
+
+/* ---- 文本字段 ---- */
+
+.settingInputField input {
+  @include field-input();
+  width: 100%;
 }

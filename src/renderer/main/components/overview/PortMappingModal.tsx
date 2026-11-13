@@ -59,8 +59,8 @@ export default observer(function PortMappingModal(props: IModalProps) {
       visible={props.visible}
       onClose={props.onClose}
     >
-      <div className={Style.container}>
-        <LunaToolbar className={Style.toolbar}>
+      <div className={Style.portMapBody}>
+        <LunaToolbar className={Style.portMapToolbar}>
           <LunaToolbarSelect
             keyName="portForwarding"
             onChange={(value) => {
@@ -75,14 +75,14 @@ export default observer(function PortMappingModal(props: IModalProps) {
           />
           <LunaToolbarInput
             keyName="local"
-            className={Style.local}
+            className={Style.portLocal}
             value={local}
             placeholder={t('local')}
             onChange={setLocal}
           />
           <LunaToolbarInput
             keyName="remote"
-            className={Style.remote}
+            className={Style.portRemote}
             value={remote}
             placeholder={t('remote')}
             onChange={setRemote}
@@ -120,7 +120,7 @@ export default observer(function PortMappingModal(props: IModalProps) {
           />
         </LunaToolbar>
         <LunaDataGrid
-          className={Style.grid}
+          className={Style.portMapGrid}
           data={rows}
           minHeight={250}
           maxHeight={250}

@@ -13,7 +13,7 @@ interface IRowProps {
 
 export function Row(props: PropsWithChildren<IRowProps>) {
   return (
-    <div className={className(Style.row, props.className)}>
+    <div className={className(Style.settingFormRow, props.className)}>
       {props.children}
     </div>
   )
@@ -58,16 +58,16 @@ export function Number(props: INumberProps) {
   )
 
   return (
-    <div className={className(Style.item, Style.itemNumber)}>
-      <div className={Style.title}>{props.title}</div>
+    <div className={className(Style.settingField, Style.settingNumberField)}>
+      <div className={Style.settingLabel}>{props.title}</div>
       {props.range ? (
-        <div className={Style.control}>
-          <span className={Style.rangeValue}>{`${props.value}/${max}`}</span>
-          <div className={Style.rangeContainer}>
-            <div className={Style.rangeTrack}>
-              <div className={Style.rangeTrackBar}>
+        <div className={Style.settingControl}>
+          <span className={Style.settingRangeValue}>{`${props.value}/${max}`}</span>
+          <div className={Style.settingRange}>
+            <div className={Style.settingRangeTrack}>
+              <div className={Style.settingRangeBar}>
                 <div
-                  className={Style.rangeTrackProgress}
+                  className={Style.settingRangeFill}
                   style={{ width: `${progress(props.value, min, max)}%` }}
                 ></div>
               </div>
@@ -76,7 +76,7 @@ export function Number(props: INumberProps) {
           </div>
         </div>
       ) : (
-        <div className={Style.control}>{input}</div>
+        <div className={Style.settingControl}>{input}</div>
       )}
     </div>
   )
@@ -90,9 +90,9 @@ interface IInputProps {
 
 export function Input(props: IInputProps) {
   return (
-    <div className={className(Style.item, Style.itemInput)}>
-      <div className={Style.title}>{props.title}</div>
-      <div className={Style.control}>
+    <div className={className(Style.settingField, Style.settingInputField)}>
+      <div className={Style.settingLabel}>{props.title}</div>
+      <div className={Style.settingControl}>
         <input
           value={props.value}
           type="text"

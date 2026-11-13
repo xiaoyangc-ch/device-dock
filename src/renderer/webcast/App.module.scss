@@ -1,69 +1,69 @@
-.container {
+/* 投屏窗口：整窗黑色底，工具栏固定在顶部，画面等比铺满 */
+.castShell {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  overflow: hidden;
   background: #000;
   color: #ddd;
-  overflow: hidden;
 }
 
-.toolbar {
+.castToolbar {
   position: relative;
   z-index: 2;
   flex-shrink: 0;
-  /* 跟随 LunaToolbar 自身 31px：38px 会在按钮上下各留 4px 空白，显得工具栏很“厚” */
+  /* 跟 luna-toolbar 自身的 31px 对齐：38px 会在按钮上下各留 4px 空白，显得很「厚」 */
   height: 31px;
   overflow-x: auto;
   overflow-y: hidden;
+  white-space: nowrap;
   background: #f7f7f7;
   border-bottom: 1px solid #d9d9d9;
-  white-space: nowrap;
+}
 
-  /* 窗口拖窄时按钮保持原尺寸，宁可横向滚动也不挤压 */
-  :global(.luna-toolbar-item),
-  :global(.luna-toolbar-button),
-  :global(.luna-toolbar-icon) {
-    flex-shrink: 0;
-  }
+/* 窗口拖窄时按钮保持原尺寸，宁可横向滚动也不挤压 */
+.castToolbar :global(.luna-toolbar-item),
+.castToolbar :global(.luna-toolbar-button),
+.castToolbar :global(.luna-toolbar-icon) {
+  flex-shrink: 0;
+}
 
-  /* 只在最小窗口附近收紧间距（默认左右各 4px 保持松快），
-     否则 19 个按钮会把最右边的「全屏/设置」挤出可视区 */
-  @media (max-width: 620px) {
-    :global(.luna-toolbar-item) {
-      margin: 0 2px;
-    }
-  }
-
-  &::-webkit-scrollbar {
-    height: 0;
+/* 只在最小窗口附近收紧间距，否则 19 个按钮会把最右边的「全屏/设置」挤出可视区 */
+@media (max-width: 620px) {
+  .castToolbar :global(.luna-toolbar-item) {
+    margin: 0 2px;
   }
 }
 
-.screen {
+.castToolbar::-webkit-scrollbar {
+  height: 0;
+}
+
+.castStage {
   position: relative;
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
   background: #000;
 }
 
-.video {
+.castVideo {
   width: 100%;
   height: 100%;
   object-fit: contain;
   outline: none;
 }
 
-.loading {
+.castLoading {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
 }
 
-.errorBox {
+.castError {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -74,111 +74,29 @@
   max-width: 90%;
   padding: 14px 18px;
   transform: translate(-50%, -50%);
+  border: 1px solid #444;
   border-radius: 8px;
   background: rgba(40, 40, 40, 0.95);
-  border: 1px solid #444;
 }
 
-.errorText {
-  color: #ffb4b4;
+.castErrorMessage {
   font-size: 12px;
+  color: #ffb4b4;
   word-break: break-all;
 }
 
-.retry {
+.castRetry {
   height: 26px;
   padding: 0 14px;
+  font-size: 12px;
+  cursor: pointer;
   border: 1px solid var(--color-primary);
   border-radius: 6px;
   background: var(--color-primary);
   color: #fff;
-  font-size: 12px;
-  cursor: pointer;
 }
 
-.mask {
-  position: fixed;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-
-.dialog {
-  width: 320px;
-  padding: 16px;
-  border-radius: 8px;
-  background: #f7f7f7;
-  color: #333;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-}
-
-.dialogTitle {
-  margin-bottom: 12px;
-  font-size: 14px;
-}
-
-.field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 12px;
-  color: #555;
-
-  select {
-    width: 150px;
-    height: 26px;
-    border: 1px solid #d9d9d9;
-    border-radius: 6px;
-    background: #fff;
-    color: #333;
-    font-size: 12px;
-  }
-}
-
-.fieldHint {
-  /* 与下拉框右对齐，单独一行：放进 label 的 flex 行里会把「编码」挤成两行并溢出弹窗 */
-  width: 150px;
-  margin: -4px 0 10px auto;
-  color: #999;
-  font-size: 11px;
-  line-height: 1.5;
-  text-align: left;
-}
-
-.dialogBtns .reboot {
-  margin-right: auto;
-  color: #d33;
-}
-
-.dialogBtns {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-
-  button {
-    height: 26px;
-    padding: 0 14px;
-    border: 1px solid #d9d9d9;
-    border-radius: 6px;
-    background: #fff;
-    color: #555;
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .primary {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-    color: #fff;
-  }
-}
-
-.toast {
+.castToast {
   position: absolute;
   left: 50%;
   bottom: 16px;
@@ -191,36 +109,120 @@
   pointer-events: none;
 }
 
-.displayItem {
-  display: block;
-  width: 100%;
-  margin-bottom: 6px;
-  padding: 6px 10px;
+/* ---- 弹层 ---- */
+
+.castOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.castDialog {
+  width: 320px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #f7f7f7;
+  color: #333;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+.castDialogTitle {
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.castDialogHint {
+  margin-bottom: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #999;
+}
+
+.castField {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #555;
+}
+
+.castField select {
+  width: 150px;
+  height: 26px;
+  font-size: 12px;
   border: 1px solid #d9d9d9;
   border-radius: 6px;
   background: #fff;
   color: #333;
+}
+
+/* 与下拉框右对齐、单独一行：塞进 label 的 flex 行会把「编码」挤成两行并溢出弹窗 */
+.castFieldHint {
+  width: 150px;
+  margin: -4px 0 10px auto;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #999;
+  text-align: left;
+}
+
+.castDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.castDialogActions button {
+  height: 26px;
+  padding: 0 14px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  color: #555;
+}
+
+.castDialogActions .castReboot {
+  margin-right: auto;
+  color: #d33;
+}
+
+.castDialogActions .castPrimary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.castDisplayOption {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 6px 10px;
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-
-  &:hover:not(:disabled) {
-    border-color: var(--color-primary);
-    color: var(--color-primary);
-  }
-
-  /* 当前正在使用的信号源：锁定，不可再点（点了也是重启同一条会话） */
-  &:disabled {
-    border-color: #e6e6e6;
-    background: #f2f2f2;
-    color: #999;
-    cursor: default;
-  }
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
 }
 
-.hint {
-  margin-bottom: 10px;
+.castDisplayOption:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* 当前信号源锁定：再点也是重启同一条会话 */
+.castDisplayOption:disabled {
+  border-color: #e6e6e6;
+  background: #f2f2f2;
   color: #999;
-  font-size: 11px;
-  line-height: 1.5;
+  cursor: default;
 }

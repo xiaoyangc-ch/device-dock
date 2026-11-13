@@ -152,7 +152,7 @@ export default function App() {
         onVideo: (element) => {
           if (cancelled) return
 
-          element.className = Style.video
+          element.className = Style.castVideo
           element.tabIndex = 0
           screenRef.current?.appendChild(element)
           videosRef.current.push(element)
@@ -378,12 +378,12 @@ export default function App() {
 
   return (
     <div
-      className={Style.container}
+      className={Style.castShell}
       onDrop={onDropFiles}
       onDragOver={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <LunaToolbar className={Style.toolbar}>
+      <LunaToolbar className={Style.castToolbar}>
         <ToolbarIcon
           icon="power"
           title={t('power')}
@@ -487,29 +487,29 @@ export default function App() {
         />
       </LunaToolbar>
 
-      <div ref={screenRef} className={Style.screen}>
+      <div ref={screenRef} className={Style.castStage}>
         {loading && (
-          <div className={Style.loading}>
+          <div className={Style.castLoading}>
             <LoadingBar />
           </div>
         )}
         {error && (
-          <div className={Style.errorBox}>
-            <div className={Style.errorText}>{error}</div>
-            <button className={Style.retry} onClick={restartSession}>
+          <div className={Style.castError}>
+            <div className={Style.castErrorMessage}>{error}</div>
+            <button className={Style.castRetry} onClick={restartSession}>
               重新连接
             </button>
           </div>
         )}
       </div>
 
-      {toast && <div className={Style.toast}>{toast}</div>}
+      {toast && <div className={Style.castToast}>{toast}</div>}
 
       {displaysOpen && (
-        <div className={Style.mask} onClick={() => setDisplaysOpen(false)}>
-          <div className={Style.dialog} onClick={(e) => e.stopPropagation()}>
-            <div className={Style.dialogTitle}>信号源</div>
-            <div className={Style.hint}>
+        <div className={Style.castOverlay} onClick={() => setDisplaysOpen(false)}>
+          <div className={Style.castDialog} onClick={(e) => e.stopPropagation()}>
+            <div className={Style.castDialogTitle}>信号源</div>
+            <div className={Style.castDialogHint}>
               副屏（HDMI）只有在设备端有内容输出时才有画面，否则是黑屏；可随时切回主屏。
             </div>
             {displays.map((item) => {
@@ -517,7 +517,7 @@ export default function App() {
               return (
                 <button
                   key={item.id}
-                  className={Style.displayItem}
+                  className={Style.castDisplayOption}
                   disabled={current}
                   onClick={() => chooseDisplay(item.id)}
                 >
@@ -526,7 +526,7 @@ export default function App() {
                 </button>
               )
             })}
-            <div className={Style.dialogBtns}>
+            <div className={Style.castDialogActions}>
               <button onClick={() => setDisplaysOpen(false)}>关闭</button>
             </div>
           </div>
@@ -569,10 +569,10 @@ function SettingsDialog(props: {
   const [draft, setDraft] = useState<CastConfig>(props.value)
 
   return (
-    <div className={Style.mask} onClick={props.onCancel}>
-      <div className={Style.dialog} onClick={(e) => e.stopPropagation()}>
-        <div className={Style.dialogTitle}>投屏设置</div>
-        <label className={Style.field}>
+    <div className={Style.castOverlay} onClick={props.onCancel}>
+      <div className={Style.castDialog} onClick={(e) => e.stopPropagation()}>
+        <div className={Style.castDialogTitle}>投屏设置</div>
+        <label className={Style.castField}>
           <span>码率</span>
           <select
             value={draft.bitRate}
@@ -589,7 +589,7 @@ function SettingsDialog(props: {
             ))}
           </select>
         </label>
-        <label className={Style.field}>
+        <label className={Style.castField}>
           <span>最大尺寸</span>
           <select
             value={draft.maxSize}
@@ -603,7 +603,7 @@ function SettingsDialog(props: {
             <option value={0}>原始分辨率</option>
           </select>
         </label>
-        <label className={Style.field}>
+        <label className={Style.castField}>
           <span>编码</span>
           <select
             value={draft.codec || 'h264'}
@@ -615,10 +615,10 @@ function SettingsDialog(props: {
             <option value="h265">H.265（省带宽，需设备支持 HEVC 编码）</option>
           </select>
         </label>
-        <div className={Style.fieldHint}>
+        <div className={Style.castFieldHint}>
           设备不支持 HEVC 编码时自动回退 H.264
         </div>
-        <label className={Style.field}>
+        <label className={Style.castField}>
           <span>帧率</span>
           <select
             value={draft.maxFps}
@@ -631,12 +631,12 @@ function SettingsDialog(props: {
             <option value={60}>60 FPS</option>
           </select>
         </label>
-        <div className={Style.dialogBtns}>
-          <button className={Style.reboot} onClick={props.onReboot}>
+        <div className={Style.castDialogActions}>
+          <button className={Style.castReboot} onClick={props.onReboot}>
             重启设备
           </button>
           <button onClick={props.onCancel}>取消</button>
-          <button className={Style.primary} onClick={() => props.onSave(draft)}>
+          <button className={Style.castPrimary} onClick={() => props.onSave(draft)}>
             保存并重连
           </button>
         </div>

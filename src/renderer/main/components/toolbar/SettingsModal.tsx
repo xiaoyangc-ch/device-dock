@@ -40,7 +40,7 @@ export default observer(function SettingsModal(props: IModalProps) {
       visible={props.visible}
       onClose={props.onClose}
     >
-      <LunaSetting className={Style.settings} onChange={onChange}>
+      <LunaSetting className={Style.settingsPanel} onChange={onChange}>
         <LunaSettingTitle title={t('appearance')} />
         <LunaSettingSelect
           keyName="theme"
