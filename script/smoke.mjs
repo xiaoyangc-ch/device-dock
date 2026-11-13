@@ -14,7 +14,9 @@ const arg = (name, def) => {
 
 const port = Number(arg('port', 9334))
 const exe = arg('exe', '')
-const settle = Number(arg('settle', 3500))
+// 应用页首次要拉全量包信息（90 多个包实测 3.2 秒），3.5 秒会卡在边界，
+// 表现为「共 0 个应用」被当成正常
+const settle = Number(arg('settle', 5000))
 const waitApp = Number(arg('wait', 40000))
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
