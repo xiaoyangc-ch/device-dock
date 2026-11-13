@@ -1,3 +1,9 @@
+/**
+ * 性能页：CPU 总量/分核、内存、FPS 三条曲线 + 电池/开机时长。
+ *
+ * 采样 1 秒一次，全部请求并行并等齐（allSettled）：
+ * 远程比 1 秒慢时不能继续叠任务，否则设备侧会堆几百条 dumpsys。
+ */
 import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import store from '../../store'
@@ -13,7 +19,6 @@ import {
   purple6Dark,
 } from 'common/theme'
 import { t } from 'common/util'
-import sum from 'licia/sum'
 import Style from './Performance.module.scss'
 import durationFormat from 'licia/durationFormat'
 import PageToolbar, {
@@ -23,41 +28,67 @@ import PageToolbar, {
   ToolText,
 } from '../layout/PageToolbar'
 import isEmpty from 'licia/isEmpty'
-import map from 'licia/map'
 import extend from 'licia/extend'
+
+interface ICpuProps {
+  dataRef: any
+  index: number
+}
+
+const Cpu = observer(function (props: ICpuProps) {
+  const cpuData = useCallback(() => {
+    const load = props.dataRef.current.cpuLoads[props.index] ?? 0
+    return Math.floor(load * 100)
+  }, [])
+
+  const isDark = store.theme === 'dark'
+  // dumpsys 解析残缺时 cpus 与 cpuLoads 长度可能不一致：
+  // 索引不到按 0 处理，别让整个面板崩掉
+  const speed = props.dataRef.current.cpus[props.index]?.speed ?? 0
+
+  return (
+    <LunaPerformanceMonitor
+      title={`CPU${props.index} ${speed}MHz`}
+      data={cpuData}
+      theme={store.theme}
+      max={100}
+      height={50}
+      color={isDark ? green4Dark : green4}
+      unit="%"
+    />
+  )
+})
 
 export default observer(function Performance() {
   const [uptime, setUptime] = useState(0)
+
+  // 曲线数据源用 ref：每秒更新不能触发 React 重渲染，
+  // 由 LunaPerformanceMonitor 自己按帧画
   const dataRef = useRef({
-    topPackage: {
-      name: '',
-      label: '',
-      pid: 0,
-    },
+    topPackage: { name: '', label: '', pid: 0 },
     memUsed: 0,
     memTotal: 0,
     batteryLevel: 0,
     batteryTemperature: 0,
     batteryVoltage: 0,
-    cpuLoads: [],
-    cpus: [],
+    cpuLoads: [] as number[],
+    cpus: [] as any[],
     cpuTemperature: 0,
     fps: 0,
   })
 
-  const memData = useCallback(() => {
-    return Math.round(dataRef.current.memUsed / 1024 / 1024)
-  }, [])
-
+  const memData = useCallback(
+    () => Math.round(dataRef.current.memUsed / 1024 / 1024),
+    []
+  )
   const cpuData = useCallback(() => {
-    const cpuLoads = dataRef.current.cpuLoads
-    if (isEmpty(cpuLoads)) {
-      return 0
-    }
-    const cpuLoad = sum(...cpuLoads) / cpuLoads.length
-    return Math.floor(cpuLoad * 100)
-  }, [])
+    const loads = dataRef.current.cpuLoads
+    if (isEmpty(loads)) return 0
 
+    let total = 0
+    for (const load of loads) total += load
+    return Math.floor((total / loads.length) * 100)
+  }, [])
   const fpsData = useCallback(() => dataRef.current.fps, [])
 
   const { device } = store
@@ -67,35 +98,35 @@ export default observer(function Performance() {
     let tick = 0
     let busy = false
 
-    async function getPerformance() {
+    async function sample() {
       // 窗口不可见时没必要每秒跑 4 条远程命令
       if (document.hidden) {
-        if (!destroyed) setTimeout(getPerformance, 15000)
+        if (!destroyed) setTimeout(sample, 15000)
         return
       }
+
       if (device && store.panel === 'performance' && !busy) {
         busy = true
         try {
-          // 所有请求放进同一批并行等待：远程比 1 秒慢时不能继续叠任务，
-          // 否则每分钟会在设备侧堆几百条 dumpsys
           const jobs: Promise<any>[] = [
             main.getUptime(device.id).then(setUptime),
             main
               .getPerformance(device.id)
-              .then((performance) => extend(dataRef.current, performance)),
+              .then((data) => extend(dataRef.current, data)),
             main.getTopPackage(device.id).then(async (topPackage) => {
               extend(dataRef.current.topPackage, topPackage)
-              if (topPackage.name) {
-                const packageInfos = await main.getPackageInfos(device.id, [
-                  topPackage.name,
-                ])
-                if (packageInfos && packageInfos[0]) {
-                  dataRef.current.topPackage.label = packageInfos[0].label
-                }
+              if (!topPackage.name) return
+
+              const infos = await main.getPackageInfos(device.id, [
+                topPackage.name,
+              ])
+              if (infos?.[0]) {
+                dataRef.current.topPackage.label = infos[0].label
               }
             }),
           ]
-          // FPS 要跑 dumpsys SurfaceFlinger，每 2 秒一次就够
+
+          // FPS 要跑 dumpsys SurfaceFlinger：2 秒一次就够
           if (tick++ % 2 === 0) {
             jobs.push(
               main
@@ -105,18 +136,18 @@ export default observer(function Performance() {
                 })
             )
           }
-          // allSettled：单条命令失败（设备掉线/进程退出）不影响其它指标
+
+          // 单条命令失败（设备掉线/进程退出）不影响其它指标
           await Promise.allSettled(jobs)
         } finally {
           busy = false
         }
       }
-      if (!destroyed) {
-        setTimeout(getPerformance, 1000)
-      }
+
+      if (!destroyed) setTimeout(sample, 1000)
     }
 
-    getPerformance()
+    sample()
 
     return () => {
       destroyed = true
@@ -124,12 +155,12 @@ export default observer(function Performance() {
   }, [device?.id, device?.type])
 
   const isDark = store.theme === 'dark'
-
   const data = dataRef.current
+
   const batteryLevel = data.batteryLevel + '%'
-  const batteryVoltage = `${(data.batteryVoltage / 1000).toFixed(2)}V`
-  const batteryTemperature = `${data.batteryTemperature / 10}°C`
-  const batteryInfo = `${batteryVoltage} ${batteryTemperature}`
+  const batteryInfo = `${(data.batteryVoltage / 1000).toFixed(2)}V ${(
+    data.batteryTemperature / 10
+  ).toFixed(1)}°C`
 
   return (
     <Page>
@@ -165,8 +196,8 @@ export default observer(function Performance() {
           unit="%"
         />
         <div className={Style.cpuContainer}>
-          {map(data.cpuLoads, (load, idx) => (
-            <Cpu key={idx} index={idx} dataRef={dataRef} load={load} />
+          {data.cpuLoads.map((_load, index) => (
+            <Cpu key={index} index={index} dataRef={dataRef} />
           ))}
         </div>
         <LunaPerformanceMonitor
@@ -192,34 +223,5 @@ export default observer(function Performance() {
         />
       </PageBody>
     </Page>
-  )
-})
-
-interface ICpuProps {
-  dataRef: any
-  index: number
-  load: number
-}
-
-const Cpu = observer(function (props: ICpuProps) {
-  const cpuData = useCallback(() => {
-    const cpuLoad = props.dataRef.current.cpuLoads[props.index] ?? 0
-    return Math.floor(cpuLoad * 100)
-  }, [])
-
-  const isDark = store.theme === 'dark'
-  // dumpsys 解析残缺时 cpus 与 cpuLoads 长度可能不一致，索引不到就按 0 处理，别让整个面板崩掉
-  const speed = props.dataRef.current.cpus[props.index]?.speed ?? 0
-
-  return (
-    <LunaPerformanceMonitor
-      title={`CPU${props.index} ${speed}MHz`}
-      data={cpuData}
-      theme={store.theme}
-      max={100}
-      height={50}
-      color={isDark ? green4Dark : green4}
-      unit="%"
-    />
   )
 })
