@@ -194,7 +194,11 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
           }
         }
         window.sendTo('main', 'finishTransfer', id, !error)
-        error ? reject(error) : resolve()
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
       }
 
       writable = fs.createWriteStream(dest)
@@ -301,7 +305,11 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
         settled = true
         release()
         window.sendTo('main', 'finishTransfer', id, !error)
-        error ? reject(error) : resolve()
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
       }
       const cleanup = (error?: any) => {
         if (settled) return
