@@ -17,6 +17,8 @@ const exe = arg('exe', '')
 // 应用页首次要拉全量包信息（90 多个包实测 3.2 秒），3.5 秒会卡在边界，
 // 表现为「共 0 个应用」被当成正常
 const settle = Number(arg('settle', 5000))
+// --strict：断言应用/进程页真的加载出数据（需要设备在线）
+const strict = argv.includes('--strict')
 const waitApp = Number(arg('wait', 40000))
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -170,10 +172,16 @@ async function main() {
     const errors = c.errors.splice(0, c.errors.length)
     // 白屏/导航没生效时 panel 存在但内容为空：不能算通过
     const empty = !panel || panel.textLen < 10
-    const bad = empty || (panel && panel.crashed) || errors.length > 0
+    // --strict：数据页必须真的加载出内容，光「不崩」不算过
+    let dataShort = ''
+    if (strict && panel && !empty) {
+      const m = panel.sample.match(/共 (\d+) (个应用|个进程)/)
+      if (m && Number(m[1]) === 0) dataShort = `数据未加载：${m[0]}`
+    }
+    const bad = empty || (panel && panel.crashed) || errors.length > 0 || !!dataShort
     if (bad) failed++
     console.log(
-      `${label}: ${JSON.stringify(panel)}${errors.length ? ' errors=' + JSON.stringify(errors.slice(0, 4)) : ''}`
+      `${label}: ${JSON.stringify(panel)}${dataShort ? ' ' + dataShort : ''}${errors.length ? ' errors=' + JSON.stringify(errors.slice(0, 4)) : ''}`
     )
   }
   c.ws.close()
