@@ -52,9 +52,8 @@ Windows 免安装 zip 与 NSIS 安装器的完整命令见 `script/` 与 `.githu
 
 ## 许可
 
-本软件为**专有软件**，保留所有权利，条款见 [LICENSE](LICENSE)。未经书面授权不得复制、分发、修改或商用。
+[MIT](LICENSE)。第三方组件（luna-*、scrcpy server、@yume-chan/scrcpy、licia、adb 等）
+按各自许可使用，声明见 [NOTICE](NOTICE)。
 
-应用代码（`src/main`、`src/share`、`src/renderer`、`server` 的 Kotlin 服务端）为本项目自有实现。
-第三方组件（luna-*、scrcpy server、@yume-chan/scrcpy、licia 等）按各自的
-MIT / Apache-2.0 许可使用，版权与许可声明见 [NOTICE](NOTICE)。
-
+> 硬盘检测功能依赖厂商提供的 `resources/disktool/shine_disk_cli_*`（未随仓库分发）。
+> 自行放置到该路径后即可使用；该二进制的许可请向厂商确认。

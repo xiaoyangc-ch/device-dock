@@ -13,3 +13,6 @@ server/local.properties
 server/build/
 server/server/build/
 server/*.dex
+
+# 硬盘检测依赖厂商提供的 CLI，许可未明确，不随开源仓库分发
+resources/disktool/shine_disk_cli_*

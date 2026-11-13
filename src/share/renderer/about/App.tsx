@@ -33,7 +33,7 @@ export default function App() {
         ))}
       </div>
       <div className={Style.licenseLine}>
-        设备坞 4.0 · 自有实现 · 第三方组件见 NOTICE
+        设备坞 4.0 · MIT · 第三方组件见 NOTICE
       </div>
     </div>
   )

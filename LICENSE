@@ -1,109 +1,21 @@
-设备坞（DeviceDock）软件许可协议
-================================
+MIT License
 
-版权所有 (C) 2026 设备坞。保留所有权利。
-Copyright (C) 2026 DeviceDock. All rights reserved.
+Copyright (c) 2026 DeviceDock (设备坞)
 
-本软件为专有软件（proprietary software），不是开源软件。
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-一、许可范围
-
-未经著作权人事先书面许可，任何个人或组织不得：
-
-  1. 复制、分发、出租、出售本软件或其任何部分；
-  2. 修改、翻译、反编译、反汇编或以其他方式试图获取源代码
-     （法律强制允许的情形除外）；
-  3. 移除或修改本软件中的版权声明、商标或其他权利标识；
-  4. 将本软件或其衍生作品用于商业目的；
-  5. 将本软件作为服务提供给第三方使用。
-
-二、您被允许的
-
-  1. 在获得授权的设备上安装并使用本软件；
-  2. 为备份目的保留一份未修改的副本；
-  3. 在获得书面授权时，按授权范围使用。
-
-三、第三方组件
-
-本软件包含或依赖以下第三方组件，它们各自按其原始许可提供，
-不受本协议约束（详见随附的 NOTICE 文件）：
-
-  - Electron、React、Node.js 及其生态依赖（MIT / Apache-2.0 / BSD）
-  - luna-* 界面组件（MIT，Copyright (C) surunzi / liriliri）
-  - @yume-chan/scrcpy 及相关解码库（MIT，Copyright (C) Simon Chan）
-  - scrcpy 设备端 server（Apache-2.0，Copyright (C) Genymobile）
-  - licia 工具库（MIT，Copyright (C) surunzi / liriliri）
-  - Android SDK / AndroidX（Apache-2.0）
-
-上述组件的许可条款优先于本协议中与之冲突的部分。
-
-四、免责声明
-
-本软件按「现状」提供，不附带任何明示或暗示的保证，包括但不限于
-适销性、特定用途适用性和不侵权的保证。在任何情况下，著作权人或
-其授权方均不对因使用本软件而产生的任何索赔、损害或其他责任负责，
-无论是在合同诉讼、侵权行为还是其他方面。
-
-五、协议终止
-
-违反本协议任一条款，您使用本软件的权利立即终止，并应立即删除
-所有副本。
-
-六、适用法律
-
-本协议适用中华人民共和国法律。因本协议引起的争议，由著作权人
-所在地有管辖权的人民法院管辖。
-
----
-
-DeviceDock Software License Agreement
-
-Copyright (C) 2026 DeviceDock. All rights reserved.
-
-This software is proprietary. It is NOT open source.
-
-1. Restrictions
-
-Without prior written permission from the copyright holder, you may NOT:
-
-  a. copy, distribute, rent, sell, or sublicense this software or any part of it;
-  b. modify, translate, reverse engineer, decompile, or disassemble this
-     software, or attempt to derive its source code (except where such
-     restriction is prohibited by applicable law);
-  c. remove or alter any copyright, trademark, or other proprietary notice;
-  d. use this software or any derivative for commercial purposes;
-  e. provide this software to third parties as a service.
-
-2. Permitted Use
-
-  a. install and use this software on authorized devices;
-  b. keep one unmodified copy for backup purposes;
-  c. use within the scope of a written authorization, if granted.
-
-3. Third-Party Components
-
-This software includes or depends on third-party components licensed under
-their own terms, which are not covered by this agreement (see the NOTICE
-file for details). Those licenses take precedence over this agreement
-where they conflict.
-
-4. Disclaimer of Warranty
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-5. Termination
-
-Any violation of this agreement immediately terminates your right to use
-this software, and you must delete all copies.
-
-6. Governing Law
-
-This agreement is governed by the laws of the People's Republic of China.
-Disputes shall be submitted to the competent court at the copyright
-holder's place of residence.
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
