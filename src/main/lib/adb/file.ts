@@ -602,7 +602,7 @@ const SKIP_MOUNTS = [
 
 // 系统分区不是用户的文件盘，扫它们又慢又没结果
 const SYSTEM_MOUNT =
-  /^\/(system|system_ext|vendor|vendor_dlkm|product|odm|odm_dlkm|apex|cache|metadata|persist|efs|firmware|boot|init|dev|proc|sys|acct|config)(\/|$)/
+  /^\/(system|system_ext|vendor|vendor_dlkm|product|odm|odm_dlkm|oem|apex|cache|metadata|persist|efs|firmware|boot|init|dev|proc|sys|acct|config|snapshot)(\/|$)/
 
 function isStorageMount(mountPoint: string, fsType: string) {
   if (!STORAGE_FS.has(fsType)) return false
@@ -687,12 +687,18 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
     // ignore
   }
 
-  // 容器下的这些名字是同一份存储的运行时视图（tmpfs/fuse 挂载，不是软链），
-  // [ ! -L ] 拦不住，必须按名字排除
+  // 容器下的这些名字不能用：要么是同一份存储的运行时视图（重复），
+  // 要么是系统镜像/应用数据的挂载点（用户不该在「全盘」里搜到）。
+  // [ ! -L ] 只能拦住软链，这些是真实挂载点，必须按名字排除。
   const CONTAINER_SKIP: Record<string, string[]> = {
     '/mnt': [
+      // 同一份存储的重复视图
       'sdcard', 'pass_through', 'androidwritable', 'installer', 'user',
       'runtime', 'asec', 'obb', 'secure', 'expand',
+      // 系统镜像：product/vendor/iso 是只读系统分区或光盘镜像
+      'product', 'vendor', 'vendor_dlkm', 'iso',
+      // appfuse：Android 11 给 App 访问自身数据用的视图，几十万条目且无用户文件
+      'appfuse',
     ],
     '/storage': ['self'],
   }
@@ -716,27 +722,31 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
     }
   }
 
-  // 顶层真实目录：厂商自定义路径不一定是挂载点，也不在常见列表里。
-  // 排除伪文件系统、系统分区和 /data（用户文件在 /data/media）
+  // 顶层真实目录兜底：只在 mounts/容器/常见路径全都没发现存储根时才跑。
+  // 平时不能跑 —— Android 根目录里 /lib 是指向 /system/lib 的软链，
+  // /root 和 /tmp-mksh 是 shell 的杂物，find -L 跟进去既慢又会搜出系统文件。
   const SKIP_TOP = new Set([
     '/proc', '/sys', '/dev', '/acct', '/config', '/d', '/etc', '/bin', '/res',
+    '/lib', '/lib64', '/root', '/tmp-mksh', '/snapshot',
     '/oem', '/system', '/system_ext', '/vendor', '/vendor_dlkm', '/product',
     '/odm', '/odm_dlkm', '/apex', '/data', '/data_mirror', '/cache',
     '/metadata', '/persist', '/efs', '/firmware', '/boot', '/init', '/sbin',
     '/lost+found', '/tmp', '/var', '/linkerconfig', '/debug_ramdisk',
     '/storage', '/mnt', '/sdcard',
   ])
-  try {
-    const out = await shell(
-      deviceId,
-      'for d in /*; do [ -d "$d" ] && echo "$d"; done'
-    )
-    for (const line of String(out).split('\n')) {
-      const item = line.trim()
-      if (item && !SKIP_TOP.has(item)) roots.add(item)
+  if (!roots.size) {
+    try {
+      const out = await shell(
+        deviceId,
+        'for d in /*; do [ -d "$d" ] && [ ! -L "$d" ] && echo "$d"; done'
+      )
+      for (const line of String(out).split('\n')) {
+        const item = line.trim()
+        if (item && !SKIP_TOP.has(item)) roots.add(item)
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
 
   if (!roots.size) {
