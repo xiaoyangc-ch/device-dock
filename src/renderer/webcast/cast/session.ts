@@ -15,6 +15,7 @@ import {
 } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { ControlChannel } from './control'
 import { decodeIncoming } from './protocol'
+import { makeScid } from './scid'
 import { SocketStream, stripCompatByte } from './transport'
 
 export type SessionState = 'idle' | 'connecting' | 'live' | 'failed'
@@ -41,16 +42,6 @@ const RETRY_DELAY = 300
 const FIRST_FRAME_TIMEOUT = 8000
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** scid 决定 abstract socket 名，8 位数字；每次会话换一个避免撞上残留 server。 */
-function makeScid(deviceId: string) {
-  let hash = 0
-  for (let i = 0; i < deviceId.length; i++) {
-    hash = (hash * 31 + deviceId.charCodeAt(i)) | 0
-  }
-  const seed = Math.abs(hash) + Math.floor(Date.now() / 1000)
-  return String(seed % 999999)
-}
 
 export class CastSession {
   readonly control: ControlChannel

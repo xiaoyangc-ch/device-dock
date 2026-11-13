@@ -130,10 +130,29 @@ async function main() {
 
   const target = await waitForApp()
   const c = await connect(target)
-  const labels = await c.evaluate(
-    `[...document.querySelectorAll('aside nav button')].map((e) => e.innerText.trim())`
-  )
+
+  // 界面可能还没渲染完就取导航：轮询等侧栏出现，避免拿到空列表
+  const waitNav = async (timeoutMs = 15000) => {
+    const started = Date.now()
+    while (Date.now() - started < timeoutMs) {
+      const labels = await c.evaluate(
+        `[...document.querySelectorAll('aside nav button')].map((e) => e.innerText.trim()).filter(Boolean)`
+      )
+      if (Array.isArray(labels) && labels.length) return labels
+      await sleep(500)
+    }
+    return []
+  }
+
+  const labels = await waitNav()
   console.log('页面:', JSON.stringify(labels))
+
+  // 空列表绝不能被当成「全部通过」：侧栏没渲染、选择器改了就完全没测到东西
+  if (!labels.length) {
+    c.ws.close()
+    console.log('\n冒烟失败：侧栏没有发现任何页面（界面未渲染或导航选择器失效）')
+    return 1
+  }
 
   let failed = 0
   for (const label of labels) {
