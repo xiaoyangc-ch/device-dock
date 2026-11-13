@@ -12,6 +12,7 @@ import fs from 'fs-extra'
 import path from 'node:path'
 import { handleEvent } from 'share/main/lib/util'
 import { getUserDataPath } from 'share/main/lib/util'
+import { assertDeletable } from 'common/guards'
 import { shell as electronShell } from 'electron'
 import {
   isRooted,
@@ -260,36 +261,6 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
 // ---------------------------------------------------------------------------
 // 删除 / 新建
 // ---------------------------------------------------------------------------
-
-// rm -rf 不可逆：设备盘根、内部存储根、系统分区一律拒绝。
-// 渲染层传什么就删什么太危险（面板是 visibility:hidden 保活的，历史上误点过）。
-const PROTECTED_DELETE = new Set([
-  '/',
-  '/sdcard',
-  '/storage',
-  '/storage/emulated',
-  '/storage/emulated/0',
-  '/data',
-  '/data/media',
-  '/data/media/0',
-  '/mnt',
-  '/system',
-  '/vendor',
-  '/product',
-  '/odm',
-  '/apex',
-])
-
-function assertDeletable(devicePath: string) {
-  const nor = devicePath.replace(/\/+$/, '') || '/'
-  if (PROTECTED_DELETE.has(nor)) {
-    throw new Error(`拒绝删除受保护路径：${devicePath}`)
-  }
-  // 只删顶层的 /xxx 也拦掉：那基本都是挂载点或系统目录
-  if (nor.split('/').filter(Boolean).length < 2) {
-    throw new Error(`拒绝删除顶层目录：${devicePath}`)
-  }
-}
 
 const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
   assertDeletable(devicePath)

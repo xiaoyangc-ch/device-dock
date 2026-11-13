@@ -16,7 +16,7 @@ else
   MAC_DIR="mac"
 fi
 OUT="$APP_DIR/release/$VERSION/$MAC_DIR/设备坞.app"
-DMG="$APP_DIR/dist/设备坞-$VERSION-$BUILD_ARCH.dmg"
+DMG="$APP_DIR/dist/设备坞-$VERSION-mac-$BUILD_ARCH.dmg"
 
 mkdir -p "$APP_DIR/dist"
 

@@ -24,6 +24,7 @@ import {
   IpcStopPackage,
   IpcUninstallPackage,
 } from 'common/types'
+import { assertPackageName } from 'common/guards'
 
 let client: Client
 
@@ -90,16 +91,6 @@ export const getPackages: IpcGetPackages = async (deviceId, system = true) => {
 // ---------------------------------------------------------------------------
 // 启停 / 安装 / 卸载 / 清数据 / 禁用
 // ---------------------------------------------------------------------------
-
-/**
- * 包名会直接拼进设备端 shell 命令：设备返回异常包名（含 ; $() 空格）时
- * 这些命令会执行任意语句。统一在入口校验，不要只在 getPackageIcon 里做。
- */
-function assertPackageName(pkg: string) {
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.]*$/.test(pkg) || pkg.length > 255) {
-    throw new Error(`非法包名：${pkg}`)
-  }
-}
 
 const stopPackage: IpcStopPackage = async (deviceId, pkg) => {
   assertPackageName(pkg)
