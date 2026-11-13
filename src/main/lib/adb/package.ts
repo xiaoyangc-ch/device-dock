@@ -321,7 +321,15 @@ export const getTopPackage: IpcGetTopPackage = (deviceId) => {
   }
 
   const promise = (async () => {
-    const out = String(await shell(deviceId, 'dumpsys activity'))
+    // 只需要 top-activity 那一行：全量 dumpsys activity 输出 144KB / 0.19 秒，
+    // 性能页每 2 秒轮询一次，光传输就占掉不少。先让设备端 grep 只回一行，
+    // 个别固件没有 grep 或输出为空时再退回全量解析。
+    let out = String(
+      await shell(deviceId, "dumpsys activity 2>/dev/null | grep -m1 top-activity")
+    )
+    if (!out.trim()) {
+      out = String(await shell(deviceId, 'dumpsys activity'))
+    }
     const line = out
       .split('\n')
       .find((item) => item.includes('top-activity'))
