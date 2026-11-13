@@ -1,3 +1,12 @@
+/**
+ * 文件管理：列目录、搜索、上传/下载、复制/移动/删除、全盘索引。
+ *
+ * 统一约定：
+ * - 设备路径一律单引号转义（文件名可能带 $()、空格、引号）；
+ * - 破坏性操作走 fileShell(..., checked=true)，adb shell 不返回退出码，
+ *   失败必须让上层看到，不能 UI 显示成功；
+ * - 大目录操作显式传 timeoutMs（删除/复制 600s，mv 120s）。
+ */
 import { Client } from '@devicefarmer/adbkit'
 import fs from 'fs-extra'
 import os from 'node:os'
@@ -46,15 +55,14 @@ import mime from 'licia/mime'
 
 let client: Client
 
+// 文件传输并发 5：太快会把设备 adbd 压死，太慢大目录要等很久
 const fileSemaphore = new Semaphore(5)
-const waitFileSemaphore = function (): Promise<void> {
-  return new Promise((resolve) => {
-    fileSemaphore.wait(() => resolve())
-  })
+function waitFileSlot(): Promise<void> {
+  return new Promise((resolve) => fileSemaphore.wait(() => resolve()))
 }
 
-// 目录递归时 stat/readdir 之前不受限：几千个文件会同时开几千条 adb 连接。
-// 单独给元数据操作限流，文件传输仍走 fileSemaphore(5)。
+// 递归目录时 stat/readdir 不经过 fileSemaphore：几千个文件会同时开几千条 adb 连接。
+// 元数据操作单独限流 8，文件传输仍走上面的 5。
 const metaSemaphore = new Semaphore(8)
 function withMetaSlot<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -70,13 +78,17 @@ function withMetaSlot<T>(fn: () => Promise<T>): Promise<T> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// 下载 / 打开
+// ---------------------------------------------------------------------------
+
 const pullFile: IpcPullFile = async function (deviceId, src, dest) {
   const stat = await withMetaSlot(() => statFile(deviceId, src))
 
   if (stat.directory) {
     await fs.ensureDir(dest)
     const files = await withMetaSlot(() => readDir(deviceId, src))
-    // 分批递归：不一次把整目录的 pullFile 全推出去（stat 已限流，这里再压并发）
+    // 分批递归：stat 已限流，这里再压一层并发，避免几千个 pull 同时开连接
     for (let i = 0; i < files.length; i += 8) {
       await Promise.all(
         files
@@ -84,71 +96,36 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
           .map((file) =>
             pullFile(
               deviceId,
-              src + '/' + file.name,
+              `${src}/${file.name}`,
               path.join(dest, file.name)
             )
           )
       )
     }
-  } else {
-    await waitFileSemaphore()
-    // 目标目录可能还不存在（例如下载到 Downloads 下的子目录），
-    // 先建父目录，否则 createWriteStream 直接 ENOENT，进度停在 0%
-    await fs.ensureDir(path.dirname(dest))
-    // 拿到信号量之后任何一条路径都不能漏掉 signal()，否则 5 次失败后整个文件页永久卡死
-    let released = false
-    const release = () => {
-      if (released) return
-      released = true
-      fileSemaphore.signal()
-    }
+    return
+  }
 
-    try {
-      const id = uuid()
+  await waitFileSlot()
+  // 目标目录可能不存在（下载到 Downloads 子目录）：先建父目录，
+  // 否则 createWriteStream 直接 ENOENT，进度停在 0%
+  await fs.ensureDir(path.dirname(dest))
 
-      // 非 root 读 /data/data：原来是「shell 用户 touch 到 /data/local/tmp →
-      // run-as 应用身份 cp 过去」，可应用对 shell:shell 0771 的 tmp 目录没有写权限，
-      // cp 必然失败；而 shell() 不返回退出码，失败被当成成功，最后落一个 0 字节文件。
-      // 改成 exec-out 让 run-as 直接把内容流到本地，设备上不落盘。
-      if (startWith(src, '/data/data/') && !(await isRooted(deviceId))) {
-        const pkg = src.replace('/data/data/', '').split('/')[0]
-        const rel = src.replace(`/data/data/${pkg}/`, '')
-        window.sendTo(
-          'main',
-          'startTransfer',
-          id,
-          TransferType.Download,
-          src,
-          dest,
-          stat.size
-        )
-        const r = await spawnAdbBuffer(
-          [
-            '-s',
-            deviceId,
-            'exec-out',
-            `run-as ${shellQuotePath(pkg)} cat ${shellQuotePath(rel)}`,
-          ],
-          120000
-        )
-        if (r.timedOut) throw new Error('拉取超时')
-        if (r.code !== 0)
-          throw new Error('拉取失败：没有权限读取该文件（设备未 root）')
-        const expected = stat.size || 0
-        if (expected > 0 && r.buffer.length !== expected) {
-          throw new Error(
-            `文件不完整：期望 ${expected} 字节，实际 ${r.buffer.length} 字节`
-          )
-        }
-        await fs.writeFile(dest, r.buffer)
-        window.sendTo('main', 'finishTransfer', id, true)
-        release()
-        return
-      }
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    fileSemaphore.signal()
+  }
 
-      const device = await client.getDevice(deviceId)
-      const transfer = await device.pull(src)
+  try {
+    const id = uuid()
 
+    // 非 root 读 /data/data：run-as 把内容直接流到本地，设备上不落盘。
+    // 旧做法「run-as cp 到 /data/local/tmp」会因 shell:shell 0771 无写权限失败，
+    // 而 shell() 不返回退出码，最后只得到一个 0 字节文件。
+    if (startWith(src, '/data/data/') && !(await isRooted(deviceId))) {
+      const pkg = src.replace('/data/data/', '').split('/')[0]
+      const rel = src.replace(`/data/data/${pkg}/`, '')
       window.sendTo(
         'main',
         'startTransfer',
@@ -158,172 +135,213 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
         dest,
         stat.size
       )
+      const result = await spawnAdbBuffer(
+        [
+          '-s',
+          deviceId,
+          'exec-out',
+          `run-as ${shellQuotePath(pkg)} cat ${shellQuotePath(rel)}`,
+        ],
+        120000
+      )
+      if (result.timedOut) throw new Error('拉取超时')
+      if (result.code !== 0) {
+        throw new Error('拉取失败：没有权限读取该文件（设备未 root）')
+      }
+      const expected = stat.size || 0
+      if (expected > 0 && result.buffer.length !== expected) {
+        throw new Error(
+          `文件不完整：期望 ${expected} 字节，实际 ${result.buffer.length} 字节`
+        )
+      }
+      await fs.writeFile(dest, result.buffer)
+      window.sendTo('main', 'finishTransfer', id, true)
+      release()
+      return
+    }
 
-      await new Promise<void>((resolve, reject) => {
-        let settled = false
-        let writable: ReturnType<typeof fs.createWriteStream> | null = null
-        const clearnup = (err?: any) => {
-          if (settled) return
-          settled = true
-          release()
-          if (err) {
-            // 失败时把写流和 adbkit 的 sync 传输一起收掉，否则 sync 连接会一直挂在 adb server 上
-            try {
-              writable?.destroy()
-            } catch {
-              // ignore
-            }
-            try {
-              ;(transfer as any).cancel?.()
-            } catch {
-              // ignore
-            }
+    const device = await client.getDevice(deviceId)
+    const transfer = await device.pull(src)
+    window.sendTo(
+      'main',
+      'startTransfer',
+      id,
+      TransferType.Download,
+      src,
+      dest,
+      stat.size
+    )
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      let writable: ReturnType<typeof fs.createWriteStream> | null = null
+
+      const finish = (error?: any) => {
+        if (settled) return
+        settled = true
+        release()
+        if (error) {
+          // 失败时收掉写流和 adbkit 的 sync 传输，否则连接一直挂在 adb server 上
+          try {
+            writable?.destroy()
+          } catch {
+            // ignore
           }
-          window.sendTo('main', 'finishTransfer', id, !err)
-          if (err) {
-            reject(err)
-          } else {
-            resolve()
+          try {
+            ;(transfer as any).cancel?.()
+          } catch {
+            // ignore
           }
         }
-        writable = fs.createWriteStream(dest)
-        // 磁盘满/无权限时 WriteStream 会发 error，没有监听就是主进程未捕获异常
-        writable.on('error', (err) => clearnup(err))
-        writable.on('finish', () => clearnup())
-        transfer.on(
-          'progress',
-          throttle(({ bytesTransferred }) => {
-            window.sendTo('main', 'updateTransfer', id, bytesTransferred)
-          }, 500)
-        )
-        transfer.on('error', (err) => clearnup(err))
-        transfer.pipe(writable)
-      })
-    } catch (e) {
-      release()
-      throw e
-    }
+        window.sendTo('main', 'finishTransfer', id, !error)
+        error ? reject(error) : resolve()
+      }
+
+      writable = fs.createWriteStream(dest)
+      // 磁盘满/无权限时 WriteStream 会发 error，没监听就是主进程未捕获异常
+      writable.on('error', (error) => finish(error))
+      writable.on('finish', () => finish())
+      transfer.on(
+        'progress',
+        throttle(({ bytesTransferred }) => {
+          window.sendTo('main', 'updateTransfer', id, bytesTransferred)
+        }, 500)
+      )
+      transfer.on('error', (error) => finish(error))
+      transfer.pipe(writable)
+    })
+  } catch (e) {
+    release()
+    throw e
   }
 }
 
-const openFile: IpcOpenFile = async function (deviceId, p) {
-  const dest = path.join(os.tmpdir(), path.basename(p))
-  await pullFile(deviceId, p, dest)
+const openFile: IpcOpenFile = async function (deviceId, devicePath) {
+  const dest = path.join(os.tmpdir(), path.basename(devicePath))
+  await pullFile(deviceId, devicePath, dest)
   electronShell.openPath(dest)
 }
 
-const deleteFile: IpcDeleteFile = async function (deviceId, path) {
+// ---------------------------------------------------------------------------
+// 删除 / 新建
+// ---------------------------------------------------------------------------
+
+const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
   // checked：rm 失败（只读挂载/权限不足）必须报错，不能让 UI 显示删除成功
-  await fileShell(deviceId, 'rm', path, undefined, true, 120000)
+  await fileShell(deviceId, 'rm', devicePath, undefined, true, 120000)
   resetFileIndex(deviceId)
 }
 
-const deleteDir: IpcDeleteDir = async function (deviceId, path) {
-  await fileShell(deviceId, 'rm -rf', path, undefined, true, 600000)
+const deleteDir: IpcDeleteDir = async function (deviceId, devicePath) {
+  await fileShell(deviceId, 'rm -rf', devicePath, undefined, true, 600000)
   resetFileIndex(deviceId)
 }
 
-const createDir: IpcCreateDir = async function (deviceId, path) {
-  await fileShell(deviceId, 'mkdir -p', path, undefined, true, 60000)
+const createDir: IpcCreateDir = async function (deviceId, devicePath) {
+  await fileShell(deviceId, 'mkdir -p', devicePath, undefined, true, 60000)
   resetFileIndex(deviceId)
 }
 
-const pushFile: IpcPushFile = async function (
-  deviceId: string,
-  src: string,
-  dest: string
-) {
+// ---------------------------------------------------------------------------
+// 上传
+// ---------------------------------------------------------------------------
+
+const pushFile: IpcPushFile = async function (deviceId, src, dest) {
   const stat = await fs.stat(src)
 
   if (stat.isDirectory()) {
     await createDir(deviceId, dest)
-    const files = await fs.readdir(src)
-    const pushes: Promise<void>[] = []
-    for (let i = 0, len = files.length; i < len; i++) {
-      const name = files[i]
-      pushes.push(pushFile(deviceId, path.join(src, name), dest + '/' + name))
+    const names = await fs.readdir(src)
+    // 分批递归：一次 Promise.all 几千个 push 会把 adb server 打满
+    for (let i = 0; i < names.length; i += 8) {
+      await Promise.all(
+        names
+          .slice(i, i + 8)
+          .map((name) =>
+            pushFile(deviceId, path.join(src, name), `${dest}/${name}`)
+          )
+      )
     }
-    await Promise.all(pushes)
-  } else {
-    await waitFileSemaphore()
-    let released = false
-    const release = () => {
-      if (released) return
-      released = true
-      fileSemaphore.signal()
+    return
+  }
+
+  await waitFileSlot()
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    fileSemaphore.signal()
+  }
+
+  let tmpFilePath = ''
+  try {
+    // 非 root 写 /data/data：先推到 /data/local/tmp，成功后再 cp 进目标目录
+    if (startWith(dest, '/data/data/') && !(await isRooted(deviceId))) {
+      tmpFilePath = '/data/local/tmp/' + uuid()
     }
 
-    let tmpFilePath = ''
-    try {
-      if (startWith(dest, '/data/data/')) {
-        if (!(await isRooted(deviceId))) {
-          tmpFilePath = '/data/local/tmp/' + uuid()
+    const device = await client.getDevice(deviceId)
+    const transfer = await device.push(src, tmpFilePath || dest)
+
+    const id = uuid()
+    window.sendTo(
+      'main',
+      'startTransfer',
+      id,
+      TransferType.Upload,
+      src,
+      dest,
+      stat.size
+    )
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const done = (error?: any) => {
+        if (settled) return
+        settled = true
+        release()
+        window.sendTo('main', 'finishTransfer', id, !error)
+        error ? reject(error) : resolve()
+      }
+      const cleanup = (error?: any) => {
+        if (settled) return
+        if (error || !tmpFilePath) {
+          // 失败时别往 /data/data 里拷半个文件，直接删临时文件
+          if (tmpFilePath) deleteFile(deviceId, tmpFilePath).catch(() => {})
+          return done(error)
         }
+        fileShell(deviceId, 'cp', tmpFilePath, dest)
+          .then(() => deleteFile(deviceId, tmpFilePath).catch(() => {}))
+          .then(() => done())
+          .catch((e) => done(e))
       }
 
-      const device = await client.getDevice(deviceId)
-      const transfer = await device.push(src, tmpFilePath || dest)
-
-      const id = uuid()
-      window.sendTo(
-        'main',
-        'startTransfer',
-        id,
-        TransferType.Upload,
-        src,
-        dest,
-        stat.size
+      transfer.on('end', () => cleanup())
+      transfer.on(
+        'progress',
+        throttle(({ bytesTransferred }) => {
+          window.sendTo('main', 'updateTransfer', id, bytesTransferred)
+        }, 500)
       )
-
-      await new Promise<void>((resolve, reject) => {
-        let settled = false
-        const done = (err?: any) => {
-          if (settled) return
-          settled = true
-          release()
-          window.sendTo('main', 'finishTransfer', id, !err)
-          if (err) {
-            reject(err)
-          } else {
-            resolve()
-          }
-        }
-        const cleanup = (err?: any) => {
-          if (settled) return
-          // 失败时不要往 /data/data 里拷半个文件，直接删掉临时文件
-          if (err || !tmpFilePath) {
-            if (tmpFilePath) deleteFile(deviceId, tmpFilePath).catch(() => {})
-            return done(err)
-          }
-          fileShell(deviceId, 'cp', tmpFilePath, dest)
-            .then(() => deleteFile(deviceId, tmpFilePath).catch(() => {}))
-            .then(() => done())
-            .catch((e) => done(e))
-        }
-        transfer.on('end', () => cleanup())
-        transfer.on(
-          'progress',
-          throttle(({ bytesTransferred }) => {
-            window.sendTo('main', 'updateTransfer', id, bytesTransferred)
-          }, 500)
-        )
-        transfer.on('error', (err) => cleanup(err))
-      })
-    } catch (e) {
-      release()
-      throw e
-    }
-    resetFileIndex(deviceId)
+      transfer.on('error', (error) => cleanup(error))
+    })
+  } catch (e) {
+    release()
+    throw e
   }
+  resetFileIndex(deviceId)
 }
 
+// ---------------------------------------------------------------------------
+// 移动 / 粘贴
+// ---------------------------------------------------------------------------
+
 const moveFile: IpcMoveFile = async function (deviceId, src, dest) {
-  // mv 会静默覆盖同名文件。重命名只该改名字，不该顺手删掉一个文件：
-  // 上层界面只看到当前分页，目标可能在未加载的下一页里，必须在设备侧再拦一次。
+  // mv 会静默覆盖同名文件。界面只看到当前分页，目标可能在未加载的下一页，
+  // 必须在设备侧再拦一次，避免重命名顺手删掉一个文件
   if (await devicePathExists(deviceId, dest)) {
     throw new Error('目标已存在同名文件')
   }
-  // checked：mv 失败（只读挂载/权限）必须报错，不能显示重命名成功
   await fileShell(deviceId, 'mv', src, dest, true, 120000)
   resetFileIndex(deviceId)
 }
@@ -333,24 +351,22 @@ function joinDevicePath(dir: string, name: string) {
   return dir.replace(/\/+$/, '') + '/' + name
 }
 
-async function devicePathExists(deviceId: string, path: string) {
+async function devicePathExists(deviceId: string, devicePath: string) {
   const out = await shell(
     deviceId,
-    `[ -e ${shellQuotePath(path)} ] && echo 1 || echo 0`
+    `[ -e ${shellQuotePath(devicePath)} ] && echo 1 || echo 0`
   )
   return String(out).trim() === '1'
 }
 
-// 复制/剪切粘贴：目标重名时自动加 " (1)"，逐个处理，单个失败不影响其余
-const pasteFiles: IpcPasteFiles = async function (
-  deviceId,
-  sources,
-  dest,
-  cut
-) {
+/**
+ * 复制/剪切粘贴：目标重名时自动加 " (1)"，逐个处理，单个失败不影响其余。
+ */
+const pasteFiles: IpcPasteFiles = async function (deviceId, sources, dest, cut) {
   const failed: { name: string; error: string }[] = []
   const used = new Set<string>()
   let copied = 0
+
   for (const src of sources) {
     const base = src.split('/').filter(Boolean).pop()
     try {
@@ -361,6 +377,7 @@ const pasteFiles: IpcPasteFiles = async function (
       if (dest === src || startWith(dest + '/', src + '/')) {
         throw new Error('不能粘贴到自身或子目录')
       }
+
       let target = joinDevicePath(dest, base)
       let n = 1
       while (used.has(target) || (await devicePathExists(deviceId, target))) {
@@ -373,6 +390,7 @@ const pasteFiles: IpcPasteFiles = async function (
         if (++n > 500) throw new Error('目标重名过多')
       }
       used.add(target)
+
       await fileShell(
         deviceId,
         cut ? 'mv' : 'cp -r',
@@ -386,48 +404,55 @@ const pasteFiles: IpcPasteFiles = async function (
       failed.push({ name: base || src, error: e?.message || String(e) })
     }
   }
+
   if (copied) resetFileIndex(deviceId)
   return { copied, failed }
 }
 
-const readDir: IpcReadDir = async function (deviceId, path) {
-  if (startWith(path, '/data/') && !startWith(path, '/data/local/tmp/')) {
+// ---------------------------------------------------------------------------
+// 列目录
+// ---------------------------------------------------------------------------
+
+const readDir: IpcReadDir = async function (deviceId, deviceDir) {
+  // /data 下非 root 走 run-as，普通 readdir 会被 SELinux 拒绝
+  if (
+    startWith(deviceDir, '/data/') &&
+    !startWith(deviceDir, '/data/local/tmp/')
+  ) {
     if (!(await isRooted(deviceId))) {
-      return readDataDir(deviceId, path)
+      return readDataDir(deviceId, deviceDir)
     }
   }
 
   const device = await client.getDevice(deviceId)
-  const files: any[] = await device.readdir(path)
+  const files: any[] = await device.readdir(deviceDir)
 
-  const ret: any[] = []
-  for (let i = 0, len = files.length; i < len; i++) {
-    const file = files[i]
+  const result: IFile[] = []
+  for (const file of files) {
     const item: IFile = {
       name: file.name,
       directory: !file.isFile(),
       mtime: new Date(file.mtimeMs),
       mode: file.mode,
     }
-
     if (!item.directory) {
       item.size = file.size
-      const ext = splitPath(file.name).ext
-      item.mime = mime(ext.slice(1))
+      item.mime = mime(splitPath(file.name).ext.slice(1))
     }
-
-    ret.push(item)
+    result.push(item)
   }
-
-  return ret
+  return result
 }
 
-function shellQuotePath(p: string) {
-  return "'" + p.replace(/'/g, "'\\''") + "'"
+/** 设备路径转 shell 单引号字符串：文件名里的 ' 要转成 '\''。 */
+function shellQuotePath(devicePath: string) {
+  return "'" + devicePath.replace(/'/g, "'\\''") + "'"
 }
 
-// Android 6.0 及更早的 ls 是 toolbox：不认 -L（直接 abort，整页为空），
-// 7.0 起换成 toybox 才支持。每条命令都试错太慢，按设备探测一次并缓存。
+/**
+ * Android 6 及更早的 ls 是 toolbox：不认 -L，直接 abort，整页为空；
+ * 7.0 起 toybox 才支持。每条命令试错太慢，按设备探测一次并缓存。
+ */
 const lsFollowCache = new Map<string, Promise<boolean>>()
 function lsFollowsSymlink(deviceId: string): Promise<boolean> {
   let probe = lsFollowCache.get(deviceId)
@@ -443,10 +468,9 @@ function lsFollowsSymlink(deviceId: string): Promise<boolean> {
   return probe
 }
 
-// 老系统（toolbox ls）不再解析 shell 输出：格式、软链、权限全是坑，
-// 直接用 adb 同步协议列目录，代价是一次把所有条目取回来
-async function readDirSorted(deviceId: string, path: string): Promise<IFile[]> {
-  const dir = path.length > 1 ? path.replace(/\/+$/, '') : path
+/** 老系统不解析 shell 输出：格式/软链/权限全是坑，直接走 adb 同步协议列目录。 */
+async function readDirSorted(deviceId: string, deviceDir: string): Promise<IFile[]> {
+  const dir = deviceDir.length > 1 ? deviceDir.replace(/\/+$/, '') : deviceDir
   const all = await readDir(deviceId, dir)
   return all.sort((a, b) => {
     if (a.directory !== b.directory) return a.directory ? -1 : 1
@@ -454,8 +478,10 @@ async function readDirSorted(deviceId: string, path: string): Promise<IFile[]> {
   })
 }
 
-// 设备上不一定有 awk：用两次 ls + grep 拼出「目录在前、文件在后」的顺序；
-// 大目录里文件夹若按字母序排在上千个文件之后，首页就会「看不到文件夹」
+/**
+ * 设备上不一定有 awk：用两次 ls + grep 拼出「目录在前、文件在后」。
+ * 大目录里文件夹若按字母序排在上千文件之后，首屏就会「看不到文件夹」。
+ */
 function dirsFirst(q: string) {
   return `{ ls -laL ${q} | grep '^d'; ls -laL ${q} | grep -v '^d' | grep -v '^total '; }`
 }
@@ -537,7 +563,7 @@ function supportsRecursiveFind(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `find . -maxdepth 0 -iname aya >/dev/null 2>&1 && echo devicedock_find_ok || echo devicedock_find_no`
+      `find . -maxdepth 0 -iname devicedock >/dev/null 2>&1 && echo devicedock_find_ok || echo devicedock_find_no`
     )
       .then((out) => contain(out, 'devicedock_find_ok'))
       .catch(() => false)
