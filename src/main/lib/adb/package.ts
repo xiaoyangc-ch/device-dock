@@ -1,13 +1,15 @@
+/**
+ * 应用管理：包列表、启停/安装/卸载/清数据/禁用、应用图标、前台应用。
+ *
+ * 应用图标是「按需」拉取的：用户选中某个应用时才 pull 它的 APK，
+ * 解出最大的一份 launcher 图后缓存到 userData/icon-cache，同一应用只拉一次。
+ */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app } from 'electron'
 import { Client } from '@devicefarmer/adbkit'
 import * as yauzl from 'yauzl'
 import { shell, shellChecked, spawnAdb } from './base'
-import singleton from 'licia/singleton'
-import each from 'licia/each'
-import trim from 'licia/trim'
-import contain from 'licia/contain'
 import { handleEvent } from 'share/main/lib/util'
 import { clearPackageCaches } from './server'
 import {
@@ -25,76 +27,127 @@ import {
 
 let client: Client
 
-// Android 6 没有 get-current-user（7.0 才加），am 只回一行错误文本。
-// 拿不到就返回 null，调用方省掉 --user（走设备默认用户），别把 NaN 拼进命令里。
-const getCurrentUser = singleton(async (deviceId: string) => {
-  const result = await shell(deviceId, 'am get-current-user')
-  const user = parseInt(trim(result).split('\n')[0].trim(), 10)
-  return Number.isFinite(user) ? user : null
-})
+// ---------------------------------------------------------------------------
+// 包列表
+// ---------------------------------------------------------------------------
 
-// 原来用 singleton 永久缓存：装/卸应用后，本次运行内列表再也不会变（应用页刷新拿到的还是旧包）
-const pkgCache = new Map<string, { ts: number; list: string[] }>()
+/**
+ * Android 6 没有 `am get-current-user`（7.0 才加），失败时返回一行错误文本。
+ * 拿不到就返回 null，调用方省掉 --user，不要把 NaN 拼进命令。
+ */
+let currentUserCache: Map<string, Promise<number | null>> | null = null
+function getCurrentUser(deviceId: string) {
+  if (!currentUserCache) currentUserCache = new Map()
+  let pending = currentUserCache.get(deviceId)
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const out = await shell(deviceId, 'am get-current-user')
+        const value = parseInt(String(out).split('\n')[0].trim(), 10)
+        return Number.isFinite(value) ? value : null
+      } catch {
+        return null
+      }
+    })()
+    currentUserCache.set(deviceId, pending)
+    pending.catch(() => currentUserCache?.delete(deviceId))
+  }
+  return pending
+}
+
 const PKG_CACHE_MS = 5000
+const pkgCache = new Map<string, { at: number; list: string[] }>()
 
 export const getPackages: IpcGetPackages = async (deviceId, system = true) => {
   const key = `${deviceId}:${system ? 1 : 0}`
   const hit = pkgCache.get(key)
-  if (hit && Date.now() - hit.ts < PKG_CACHE_MS) {
-    return hit.list
-  }
+  if (hit && Date.now() - hit.at < PKG_CACHE_MS) return hit.list
+
   const user = await getCurrentUser(deviceId)
-  const result: string = await shell(
-    deviceId,
-    `pm list packages${system ? '' : ' -3'}${
-      user === null ? '' : ` --user ${user}`
-    }`
-  )
-  // 只认 package: 行：设备不支持某个选项时会回一行 Error，
-  // 旧代码 line.slice(8) 把错误文本当成了包名
+  const args = [
+    'pm',
+    'list',
+    'packages',
+    system ? '' : '-3',
+    user === null ? '' : `--user ${user}`,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const out = String(await shell(deviceId, args))
+
+  // 只认 package: 行：设备不认某个选项时会回一行 Error，
+  // 直接 slice(8) 会把错误文本当成包名
   const list: string[] = []
-  each(trim(result).split('\n'), (line) => {
-    const match = trim(line).match(/^package:(\S+)/)
-    if (match) {
-      list.push(match[1])
-    }
-  })
-  pkgCache.set(key, { ts: Date.now(), list })
+  for (const raw of out.split('\n')) {
+    const matched = raw.trim().match(/^package:(\S+)/)
+    if (matched) list.push(matched[1])
+  }
+
+  pkgCache.set(key, { at: Date.now(), list })
   return list
 }
 
-const stopPackage: IpcStopPackage = async function (deviceId, pkg) {
+// ---------------------------------------------------------------------------
+// 启停 / 安装 / 卸载 / 清数据 / 禁用
+// ---------------------------------------------------------------------------
+
+const stopPackage: IpcStopPackage = async (deviceId, pkg) => {
   await shell(deviceId, `am force-stop ${pkg}`)
 }
 
-const clearPackage: IpcClearPackage = async function (deviceId, pkg) {
+const clearPackage: IpcClearPackage = async (deviceId, pkg) => {
   const device = await client.getDevice(deviceId)
   await device.clear(pkg)
 }
 
-const startPackage: IpcStartPackage = async function (deviceId, pkg) {
+const startPackage: IpcStartPackage = async (deviceId, pkg) => {
   const component = await getMainComponent(deviceId, pkg)
   const device = await client.getDevice(deviceId)
-  await device.startActivity({
-    component,
-  })
+  await device.startActivity({ component })
 }
 
-const installPackage: IpcInstallPackage = async function (deviceId, apkPath) {
+const installPackage: IpcInstallPackage = async (deviceId, apkPath) => {
   const device = await client.getDevice(deviceId)
   await device.install(apkPath)
-  // 新装的包 versionCode 变了：别等 30 秒 TTL，立刻让应用页重新取
+  // 新装包的 versionCode 变了：立刻让应用页重新取，不等 5 秒缓存
   clearPackageCaches(deviceId)
 }
 
-const uninstallPackage: IpcUninstallPackage = async function (deviceId, pkg) {
+const uninstallPackage: IpcUninstallPackage = async (deviceId, pkg) => {
   const device = await client.getDevice(deviceId)
   await device.uninstall(pkg)
   clearPackageCaches(deviceId)
 }
 
+const disablePackage: IpcDisablePackage = async (deviceId, pkg) => {
+  // checked：系统应用禁用失败必须报错，以前一律当成功
+  await shellChecked(deviceId, `pm disable-user ${pkg}`)
+}
 
-// ---- 应用图标：只在用户选中应用时按需拉取一次 APK，解出最大的一份 launcher 图 ----
+const enablePackage: IpcEnablePackage = async (deviceId, pkg) => {
+  await shellChecked(deviceId, `pm enable ${pkg}`)
+}
+
+/**
+ * 找应用的主 Activity：`dumpsys package` 里 MAIN intent filter 的第一行就是。
+ * 返回 `pkg/Activity`，直接可以给 `am start` 用。
+ */
+async function getMainComponent(deviceId: string, pkg: string) {
+  const out = String(
+    await shell(deviceId, `dumpsys package ${pkg} | grep -A 1 MAIN`)
+  )
+  const pattern = new RegExp(`${pkg.replace(/\./g, '\\.')}/([\\w.$]+)`)
+  for (const raw of out.split('\n')) {
+    const matched = raw.match(pattern)
+    if (matched) return `${pkg}/${matched[1]}`
+  }
+  throw new Error('Failed to get main activity')
+}
+
+// ---------------------------------------------------------------------------
+// 图标：pull APK → 解压挑最大 launcher 图 → 缓存
+// ---------------------------------------------------------------------------
+
 const iconMem = new Map<string, string>()
 const iconPending = new Map<string, Promise<string>>()
 
@@ -106,6 +159,7 @@ function iconCacheFile(pkg: string) {
   return path.join(iconDir(), encodeURIComponent(pkg) + '.txt')
 }
 
+/** 给 APK 里的图标候选打分：mipmap 优先、launcher 命名优先、高 dpi 优先、方形优先。 */
 function iconScore(name: string, size: number) {
   if (!/\.(png|webp)$/i.test(name)) return 0
   let score = 0
@@ -125,9 +179,24 @@ function iconScore(name: string, size: number) {
 
 function readApkIcon(apk: string): Promise<{ data: Buffer; mime: string } | null> {
   return new Promise((resolve) => {
+    // autoClose: false 是必须的：lazyEntries 读到 end 时 yauzl 会自动关掉文件，
+    // 后面再 openReadStream 就会报 closed
     yauzl.open(apk, { lazyEntries: true, autoClose: false }, (err, zip) => {
       if (err || !zip) return resolve(null)
+
       const candidates: Array<{ entry: yauzl.Entry; score: number }> = []
+      let settled = false
+      const finish = (value: { data: Buffer; mime: string } | null) => {
+        if (settled) return
+        settled = true
+        try {
+          zip.close()
+        } catch {
+          // ignore
+        }
+        resolve(value)
+      }
+
       zip.on('entry', (entry: yauzl.Entry) => {
         if (entry.fileName.endsWith('/')) {
           zip.readEntry()
@@ -137,35 +206,27 @@ function readApkIcon(apk: string): Promise<{ data: Buffer; mime: string } | null
         if (score > 0) candidates.push({ entry, score })
         zip.readEntry()
       })
-      zip.on('error', () => resolve(null))
+      zip.on('error', () => finish(null))
       zip.on('end', () => {
-        if (!candidates.length) {
-          zip.close()
-          return resolve(null)
-        }
+        if (!candidates.length) return finish(null)
+
         candidates.sort((a, b) => b.score - a.score)
         const entry = candidates[0].entry
         zip.openReadStream(entry, (readErr, stream) => {
-          if (readErr || !stream) {
-            zip.close()
-            return resolve(null)
-          }
+          if (readErr || !stream) return finish(null)
+
           const chunks: Buffer[] = []
           let size = 0
           stream.on('data', (chunk: Buffer) => {
             size += chunk.length
-            // 图标不该有几 MB：超过就直接放弃，避免把畸形 APK 读进内存
+            // 图标不该有几 MB：超过就放弃，避免畸形 APK 把内存吃满
             if (size <= 2 * 1024 * 1024) chunks.push(chunk)
           })
-          stream.on('error', () => {
-            zip.close()
-            resolve(null)
-          })
+          stream.on('error', () => finish(null))
           stream.on('end', () => {
-            zip.close()
-            if (!chunks.length) return resolve(null)
+            if (!chunks.length) return finish(null)
             const ext = path.extname(entry.fileName).toLowerCase()
-            resolve({
+            finish({
               data: Buffer.concat(chunks),
               mime: ext === '.webp' ? 'image/webp' : 'image/png',
             })
@@ -192,20 +253,20 @@ async function readIconCache(pkg: string) {
   return ''
 }
 
-export const getPackageIcon: IpcGetPackageIcon = async function (
-  deviceId,
-  pkg
-) {
+export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
   // 包名会拼进 pm 命令和本地缓存文件名，先卡死字符集
   if (!/^[A-Za-z0-9_.]+$/.test(pkg)) return ''
+
   const cached = await readIconCache(pkg)
   if (cached) return cached
   const running = iconPending.get(pkg)
   if (running) return running
 
   const task = (async () => {
-    const out = await shell(deviceId, `pm path ${pkg}`).catch(() => '')
-    const apk = String(out)
+    const out = String(
+      await shell(deviceId, `pm path ${pkg}`).catch(() => '')
+    )
+    const apk = out
       .split('\n')
       .map((line) => line.trim())
       .find((line) => line.startsWith('package:'))
@@ -220,6 +281,7 @@ export const getPackageIcon: IpcGetPackageIcon = async function (
       await spawnAdb(['-s', deviceId, 'pull', apk, tmp], 120000)
       const icon = await readApkIcon(tmp)
       if (!icon) return ''
+
       const url = `data:${icon.mime};base64,${icon.data.toString('base64')}`
       iconMem.set(pkg, url)
       fs.mkdir(iconDir(), { recursive: true })
@@ -237,63 +299,48 @@ export const getPackageIcon: IpcGetPackageIcon = async function (
   return task
 }
 
-async function getMainComponent(deviceId: string, pkg: string) {
-  const result = await shell(
-    deviceId,
-    `dumpsys package ${pkg} | grep -A 1 MAIN`
-  )
-  const lines = result.split('\n')
-  for (let i = 0, len = lines.length; i < len; i++) {
-    const line = trim(lines[i])
-    if (contain(line, `${pkg}/`)) {
-      return line.substring(line.indexOf(`${pkg}/`), line.indexOf(' filter'))
-    }
+// ---------------------------------------------------------------------------
+// 前台应用
+// ---------------------------------------------------------------------------
+
+const TOP_PACKAGE_TTL = 2000
+let topPackageCache: {
+  at: number
+  deviceId: string
+  promise: Promise<{ name: string; pid: number }>
+} | null = null
+
+export const getTopPackage: IpcGetTopPackage = (deviceId) => {
+  // 性能页会轮询这个值：必须短 TTL，否则前台应用永远停在第一次的快照
+  if (
+    topPackageCache &&
+    topPackageCache.deviceId === deviceId &&
+    Date.now() - topPackageCache.at < TOP_PACKAGE_TTL
+  ) {
+    return topPackageCache.promise
   }
 
-  throw new Error('Failed to get main activity')
-}
+  const promise = (async () => {
+    const out = String(await shell(deviceId, 'dumpsys activity'))
+    const line = out
+      .split('\n')
+      .find((item) => item.includes('top-activity'))
+    if (!line) return { name: '', pid: 0 }
 
-export const getTopPackage = singleton(<IpcGetTopPackage>(
-  async function (deviceId) {
-    const topActivity = await shell(deviceId, 'dumpsys activity')
-    const lines = topActivity.split('\n')
-    let line = ''
-    for (let i = 0, len = lines.length; i < len; i++) {
-      if (contain(lines[i], 'top-activity')) {
-        line = trim(lines[i])
-        break
-      }
-    }
+    // 形如 `... 1234:com.xxx/.MainActivity ...`：倒数第二个字段是 pid:name
+    const parts = line.trim().split(/\s+/)
+    const token = parts[parts.length - 2] || ''
+    const [pidText, rawName = ''] = token.split(':')
+    const name = rawName.includes('/') ? rawName.split('/')[0] : rawName
+    return { name, pid: parseInt(pidText, 10) || 0 }
+  })()
 
-    if (!line) {
-      return {
-        name: '',
-        pid: 0,
-      }
-    }
-
-    let parts = line.split(/\s+/)
-    parts = parts[parts.length - 2].split(':')
-    const pid = parseInt(parts[0], 10)
-    let name = parts[1]
-    if (contain(name, '/')) {
-      name = name.split('/')[0]
-    }
-
-    return {
-      name,
-      pid,
-    }
-  }
-))
-
-const disablePackage: IpcDisablePackage = async function (deviceId, pkg) {
-  // checked：系统应用禁用失败必须报错，以前一律当成成功
-  await shellChecked(deviceId, `pm disable-user ${pkg}`)
-}
-
-const enablePackage: IpcEnablePackage = async function (deviceId, pkg) {
-  await shellChecked(deviceId, `pm enable ${pkg}`)
+  const entry = { at: Date.now(), deviceId, promise }
+  topPackageCache = entry
+  promise.catch(() => {
+    if (topPackageCache === entry) topPackageCache = null
+  })
+  return promise
 }
 
 export async function init(c: Client) {
