@@ -1,37 +1,16 @@
+/**
+ * 右键菜单：模板交给主进程用原生 Menu 弹（比自绘准，也不受窗口边界裁切）。
+ * 回调函数不能过 IPC：转成 uuid，主进程点中后回发 clickContextMenu。
+ */
 import LunaMenu from 'luna-menu'
-import each from 'licia/each'
 import isFn from 'licia/isFn'
 import uuid from 'licia/uuid'
 import types from 'licia/types'
 
-export default function contextMenu(
-  e: {
-    clientX: number
-    clientY: number
-  },
-  template: any
-) {
-  const menu = LunaMenu.build(template)
-
-  setTimeout(() => menu.show(e.clientX, e.clientY), 150)
-}
-
-const build = LunaMenu.build
-LunaMenu.build = function (template) {
-  const menu = build([])
-  // 上一次菜单没点任何项就被关掉时，回调会一直挂在 map 里；构建新菜单时清掉
-  callbacks = {}
-  transTpl(template)
-  menu.show = function (x, y) {
-    main.showContextMenu(x, y, template)
-  }
-  return menu
-}
-
 let callbacks: types.PlainObj<types.AnyFn> = {}
 
-function transTpl(template) {
-  each(template, (item: any) => {
+function transTpl(template: any[]) {
+  for (const item of template as any[]) {
     if (isFn(item.click)) {
       const id = uuid()
       callbacks[id] = item.click
@@ -40,13 +19,34 @@ function transTpl(template) {
     if (item.type === 'submenu') {
       item.submenu = transTpl(item.submenu)
     }
-  })
+  }
   return template
 }
 
+// 接管 LunaMenu.build：模板仍然在这里转换，但弹出交给主进程
+const originalBuild = LunaMenu.build
+LunaMenu.build = function (template) {
+  const menu = originalBuild([])
+  // 上一次菜单没点就关掉时回调会一直挂着：构建新菜单时清空
+  callbacks = {}
+  transTpl(template)
+  menu.show = (x: number, y: number) => main.showContextMenu(x, y, template)
+  return menu
+}
+
+export default function contextMenu(
+  e: { clientX: number; clientY: number },
+  template: any
+) {
+  const menu = LunaMenu.build(template)
+  // 等当前 click 事件结束再弹：否则菜单会被这次点击直接关掉
+  setTimeout(() => menu.show(e.clientX, e.clientY), 150)
+}
+
 main.on('clickContextMenu', (id: string) => {
-  if (callbacks[id]) {
-    callbacks[id]()
+  const fn = callbacks[id]
+  if (fn) {
+    fn()
     callbacks = {}
   }
 })

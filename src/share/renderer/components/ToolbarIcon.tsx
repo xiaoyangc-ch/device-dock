@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { PropsWithChildren, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { LunaToolbarButton } from 'luna-toolbar/react'
-import { PropsWithChildren } from 'react'
 import Style from './ToolbarIcon.module.scss'
 
 interface IProps {
@@ -13,31 +12,33 @@ interface IProps {
   onClick: () => void
 }
 
-export default function (props: PropsWithChildren<IProps>) {
+/** 工具栏图标按钮 + 自绘 tooltip（原生 title 太慢且不可控）。 */
+export default function ToolbarIcon(props: PropsWithChildren<IProps>) {
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
-  const timer = useRef<any>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  function show(e: React.MouseEvent) {
-    const text = props.title
-    if (!text) return
+  function hover(e: React.MouseEvent) {
+    if (!props.title) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    clearTimeout(timer.current)
+    if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
       setTip({ x: rect.left + rect.width / 2, y: rect.bottom + 6 })
     }, 350)
   }
 
   function hide() {
-    clearTimeout(timer.current)
+    if (timer.current) clearTimeout(timer.current)
     setTip(null)
   }
 
-  useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
 
   return (
     <span
       className={Style.wrap}
-      onMouseEnter={show}
+      onMouseEnter={hover}
       onMouseLeave={hide}
       onMouseDown={hide}
     >

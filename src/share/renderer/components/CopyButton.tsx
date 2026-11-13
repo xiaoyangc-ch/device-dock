@@ -7,26 +7,22 @@ interface IProps {
   onClick: () => void
 }
 
+/** 复制按钮：点完 1 秒内变勾，给出明确反馈。 */
 export default function CopyButton(props: IProps) {
-  const [showSuccess, setShowSuccess] = useState(false)
+  const [done, setDone] = useState(false)
 
   const onClick = () => {
     props.onClick()
-    setShowSuccess(true)
-    setTimeout(() => setShowSuccess(false), 1000)
-  }
-
-  const style: React.CSSProperties = {}
-  if (showSuccess) {
-    style.color = 'var(--color-success)'
+    setDone(true)
+    setTimeout(() => setDone(false), 1000)
   }
 
   return (
     <div className={className('icon', props.className)} onClick={onClick}>
       <span
-        className={`icon-${showSuccess ? 'check' : 'copy'}`}
+        className={`icon-${done ? 'check' : 'copy'}`}
         title={t('copy')}
-        style={style}
+        style={done ? { color: 'var(--color-success)' } : undefined}
       ></span>
     </div>
   )

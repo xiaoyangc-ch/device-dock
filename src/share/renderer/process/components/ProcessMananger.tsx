@@ -6,45 +6,7 @@ import store from '../store'
 import Style from './ProcessManager.module.scss'
 import { useRef } from 'react'
 import { useResizeSensor } from '../../lib/hooks'
-import map from 'licia/map'
 import fileSize from 'licia/fileSize'
-
-export default observer(function ProcessManager() {
-  const dataGridRef = useRef<DataGrid>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useResizeSensor(containerRef, () => dataGridRef.current?.fit())
-
-  const processes = map(store.processes, (process) => {
-    return {
-      name: process.name,
-      pid: process.pid,
-      memory: fileSize(process.memory * 1024),
-      cpu: process.cpu.toFixed(1),
-      type: process.type,
-      webContentsId: process.webContentsId,
-    }
-  })
-
-  return (
-    <div className={Style.container} ref={containerRef}>
-      <LunaDataGrid
-        className={Style.processes}
-        onSelect={(node) => store.select((node as any).data as any)}
-        onDeselect={() => store.select(null)}
-        filter={store.filter}
-        columns={columns}
-        selectable={true}
-        data={processes}
-        uniqueId="pid"
-        onCreate={(dataGrid) => {
-          dataGridRef.current = dataGrid
-          dataGrid.fit()
-        }}
-      />
-    </div>
-  )
-})
 
 const columns = [
   {
@@ -62,6 +24,7 @@ const columns = [
   {
     id: 'memory',
     title: t('memory'),
+    // 显示是 "123 MB" 字符串，排序必须按字节比，否则 9MB 会排在 100MB 后面
     comparator: (a: string, b: string) => fileSize(a) - fileSize(b),
     weight: 15,
     sortable: true,
@@ -79,3 +42,39 @@ const columns = [
     sortable: true,
   },
 ]
+
+export default observer(function ProcessManager() {
+  const dataGridRef = useRef<DataGrid>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useResizeSensor(containerRef, () => dataGridRef.current?.fit())
+
+  const rows = store.processes.map((process) => ({
+    name: process.name,
+    pid: process.pid,
+    // 主进程报的是 KB
+    memory: fileSize(process.memory * 1024),
+    cpu: process.cpu.toFixed(1),
+    type: process.type,
+    webContentsId: process.webContentsId,
+  }))
+
+  return (
+    <div className={Style.container} ref={containerRef}>
+      <LunaDataGrid
+        className={Style.processes}
+        onSelect={(node) => store.select((node as any).data)}
+        onDeselect={() => store.select(null)}
+        filter={store.filter}
+        columns={columns}
+        selectable={true}
+        data={rows}
+        uniqueId="pid"
+        onCreate={(dataGrid) => {
+          dataGridRef.current = dataGrid
+          dataGrid.fit()
+        }}
+      />
+    </div>
+  )
+})

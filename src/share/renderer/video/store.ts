@@ -5,6 +5,7 @@ import last from 'licia/last'
 
 class Store extends BaseStore {
   url = ''
+
   constructor() {
     super()
 
@@ -14,14 +15,16 @@ class Store extends BaseStore {
     })
 
     this.setUrl(getUrlParam('videoUrl') || '')
-
     this.bindEvent()
   }
+
   setUrl(url: string) {
     this.url = url
     preload.setTitle(decodeURIComponent(last(url.split('/'))))
   }
+
   private bindEvent() {
+    // 窗口复用：已开着的播放器换片源，不重建窗口
     main.on('setVideoUrl', (url: string) => this.setUrl(url))
   }
 }

@@ -16,31 +16,29 @@ import Style from './Toolbar.module.scss'
 export default observer(function Toolbar() {
   async function stop() {
     const process = store.process!
-    const result = await LunaModal.confirm(
+    const confirmed = await LunaModal.confirm(
       t('killProcessConfirm', { name: process.name })
     )
-    if (result) {
-      main.killProcess(process.pid)
-      store.refresh()
-    }
+    if (!confirmed) return
+
+    main.killProcess(process.pid)
+    store.refresh()
   }
 
   function inspect() {
     const process = store.process!
+    // 渲染进程有自己的 devtools；主进程要走 --inspect，只有 dev 下开得起来
     if (process.webContentsId) {
-      main.openDevtools(process.webContentsId!)
+      main.openDevtools(process.webContentsId)
     } else {
       main.debugMainProcess()
     }
   }
 
-  let isDebuggable = false
-  const process = store.process
-  if (process) {
-    isDebuggable = toBool(
-      process.webContentsId || (isDev() && process.type === 'Browser')
-    )
-  }
+  const current = store.process
+  const canInspect = current
+    ? toBool(current.webContentsId || (isDev() && current.type === 'Browser'))
+    : false
 
   return (
     <LunaToolbar className={Style.container}>
@@ -55,7 +53,7 @@ export default observer(function Toolbar() {
       />
       <LunaToolbarSpace />
       <ToolbarIcon
-        disabled={!isDebuggable}
+        disabled={!canInspect}
         icon="debug"
         title={t('inspect')}
         onClick={inspect}

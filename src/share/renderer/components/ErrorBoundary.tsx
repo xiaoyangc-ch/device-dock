@@ -7,7 +7,7 @@ const logger = log('renderer')
 type Props = PropsWithChildren<{ name?: string }>
 type State = { error: Error | null }
 
-// 单个页面渲染崩溃时只坏这一页，工具栏和其他页面继续可用
+/** 单个页面渲染崩溃只坏这一页：工具栏和侧栏仍然可用。 */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null }
 

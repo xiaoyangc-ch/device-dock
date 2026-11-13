@@ -1,3 +1,7 @@
+/**
+ * 文件预览：按 mime 选择图片/视频/音频/文本/PDF 查看器。
+ * 音频要多一个可视化条，所以和 LunaMusicPlayer 共享同一个 audio 实例。
+ */
 import { JSX, useEffect, useState } from 'react'
 import Style from './FilePreview.module.scss'
 import { IFile } from 'luna-file-list'
@@ -12,6 +16,8 @@ import axios from 'axios'
 import isStr from 'licia/isStr'
 import truncate from 'licia/truncate'
 
+const MAX_TEXT = 100000
+
 interface IProps {
   file?: IFile
   url?: string
@@ -19,7 +25,7 @@ interface IProps {
 
 export default function Preview(props: IProps) {
   const { file, url } = props
-  const [audioObj, setAudioObj] = useState<HTMLAudioElement>(new Audio())
+  const [audio, setAudio] = useState<HTMLAudioElement>(new Audio())
 
   let preview: JSX.Element = (
     <div className={Style.noPreview}>{t('noPreview')}</div>
@@ -27,69 +33,65 @@ export default function Preview(props: IProps) {
 
   if (!file) {
     preview = <div className={Style.noPreview}>{t('fileNotSelected')}</div>
-  } else if (!file.directory && url) {
+  } else if (!file.directory && url && file.mime) {
     const mime = file.mime
-    if (mime) {
-      if (mime === 'application/pdf') {
-        preview = <iframe className={Style.pdfViewer} src={url} />
-      } else if (startWith(mime, 'image/')) {
-        preview = <LunaImageViewer image={url} />
-      } else if (startWith(mime, 'video/')) {
-        preview = <LunaVideoPlayer className={Style.videoPlayer} url={url} />
-      } else if (startWith(mime, 'audio/')) {
-        preview = (
-          <div className={Style.musicPlayerContainer}>
-            <LunaMusicVisualizer
-              className={Style.musicVisualizer}
-              audio={audioObj}
-              fftSize={256}
-            />
-            <LunaMusicPlayer
-              className={Style.musicPlayer}
-              audio={{ title: file.name, url }}
-              onCreate={(musicPlayer) => {
-                setAudioObj(musicPlayer.getAudio())
-              }}
-            />
-          </div>
-        )
-      } else if (startWith(mime, 'text/')) {
-        preview = <TextViewer url={url} />
-      }
+
+    if (mime === 'application/pdf') {
+      preview = <iframe className={Style.pdfViewer} src={url} />
+    } else if (startWith(mime, 'image/')) {
+      preview = <LunaImageViewer image={url} />
+    } else if (startWith(mime, 'video/')) {
+      preview = <LunaVideoPlayer className={Style.videoPlayer} url={url} />
+    } else if (startWith(mime, 'audio/')) {
+      preview = (
+        <div className={Style.musicPlayerContainer}>
+          <LunaMusicVisualizer
+            className={Style.musicVisualizer}
+            audio={audio}
+            fftSize={256}
+          />
+          <LunaMusicPlayer
+            className={Style.musicPlayer}
+            audio={{ title: file.name, url }}
+            onCreate={(player) => setAudio(player.getAudio())}
+          />
+        </div>
+      )
+    } else if (startWith(mime, 'text/')) {
+      preview = <TextViewer url={url} />
     }
   }
 
   return <div className={Style.container}>{preview}</div>
 }
 
-interface ITextViewerProps {
-  url: string
-}
-
-function TextViewer(props: ITextViewerProps) {
+function TextViewer(props: { url: string }) {
   const [text, setText] = useState('')
 
   useEffect(() => {
     let alive = true
     setText('')
+
     axios
       .get(props.url)
       .then((response) => {
         if (!alive) return
-        if (isStr(response.data)) {
-          let text = response.data
-          if (text.length > 100000) {
-            text = truncate(text, 100000)
-          }
-          setText(text)
-        } else {
+        if (!isStr(response.data)) {
           setText(t('commonErr'))
+          return
         }
+        // 大日志直接塞进查看器会卡死渲染进程：截断到 10 万字符
+        setText(
+          response.data.length > MAX_TEXT
+            ? truncate(response.data, MAX_TEXT)
+            : response.data
+        )
       })
       .catch(() => {
-        // 文件被删/设备掉线：显示错误而不是未处理拒绝
+        // 文件被删/设备掉线：显示错误文案，不要变成未处理拒绝
         if (alive) setText(t('commonErr'))
       })
+
     return () => {
       alive = false
     }

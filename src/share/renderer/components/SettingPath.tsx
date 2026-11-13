@@ -13,12 +13,11 @@ interface IProps {
   onChange: (val: string) => void
 }
 
-export default function (props: IProps) {
+/** 路径输入 + 浏览按钮：用户可以直接粘贴路径，也可以走系统选择框。 */
+export default function SettingPath(props: IProps) {
   const browse = async () => {
     const { filePaths } = await main.showOpenDialog(props.options)
-    if (!isEmpty(filePaths)) {
-      props.onChange(filePaths[0])
-    }
+    if (!isEmpty(filePaths)) props.onChange(filePaths[0])
   }
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -26,9 +26,9 @@ export default function App() {
       </div>
       <div className={Style.changes}>
         <div className={Style.changesTitle}>更新内容</div>
-        {CHANGES.map((c, i) => (
-          <div key={i} className={Style.item}>
-            {c}
+        {CHANGES.map((item, index) => (
+          <div key={index} className={Style.item}>
+            {item}
           </div>
         ))}
       </div>
