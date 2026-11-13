@@ -1,116 +1,137 @@
-import singleton from 'licia/singleton'
-import each from 'licia/each'
-import trim from 'licia/trim'
-import startWith from 'licia/startWith'
-import map from 'licia/map'
-import lowerCase from 'licia/lowerCase'
+/**
+ * adb 命令层：设备侧所有命令都从这里出。
+ *
+ * 约定：
+ * - 文本命令走 shell()：多条命令用分隔符拼成一次 shell 往返，减少 adb 连接开销；
+ * - 需要退出码的破坏性操作走 shellChecked()，否则 rm/pm 失败会被当成成功；
+ * - 流式输出走 spawnAdbLines()，二进制流走 spawnAdbBuffer()；
+ * - 超时一律返回 timedOut 标记，调用方必须检查，不能把半截输出当完整结果。
+ *
+ * 这层只依赖 adbkit 的 Client（负责连接/forward 管理）和系统 adb 二进制，
+ * 不依赖任何 AYA 的代码。
+ */
+import childProcess from 'node:child_process'
+import path from 'node:path'
+import fs from 'fs-extra'
 import Adb, { Client } from '@devicefarmer/adbkit'
 import getPort from 'licia/getPort'
-import toNum from 'licia/toNum'
-import types from 'licia/types'
-import isStr from 'licia/isStr'
 import log from 'share/common/log'
 import { decodeAdbOutput } from 'common/adbParse'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
-import isWindows from 'licia/isWindows'
-import isStrBlank from 'licia/isStrBlank'
-import fs from 'fs-extra'
 import { getSettingsStore } from '../store'
-import childProcess from 'node:child_process'
-import path from 'node:path'
-import contain from 'licia/contain'
 import { IpcGetProcesses, IpcReverseTcp, IProcess } from 'common/types'
 
 const logger = log('adbBase')
-
 const settingsStore = getSettingsStore()
 
-let client: Client
+let client: Client | undefined
 
-export const getPidNames = singleton(async (deviceId: string) => {
-  const processes = await getProcesses(deviceId)
-  const pidNames = {}
-  each(processes, (process) => {
-    pidNames[process.pid] = process.name
-  })
-  return pidNames
-})
+/** 多命令拼接用的分隔符；带随机后缀，避免和命令输出里的同名文本撞上。 */
+const RUN_ID = Math.random().toString(36).slice(2, 8)
+const SEPARATOR = `__devicedock_sep_${RUN_ID}__`
+/** 退出码哨兵前缀，必须和 shellChecked() 的拼接保持一致。 */
+const EXIT_MARKER = `__devicedock_exit_${RUN_ID}__`
 
-export const getProcesses = singleton(<IpcGetProcesses>(async (
-  deviceId: string
-) => {
-  let columns = ['pid', '%cpu', 'time+', 'res', 'user', 'name', 'args']
-  let command = 'top -b -n 1'
-  each(columns, (column) => {
-    command += ` -o ${column}`
-  })
+// ---------------------------------------------------------------------------
+// 设备级缓存：按 deviceId 存连接对象、forward 端口、图标缓存等
+// ---------------------------------------------------------------------------
 
-  const result: string = await shell(deviceId, command)
-  let lines = result.split('\n')
-  let start = -1
-  for (let i = 0, len = lines.length; i < len; i++) {
-    if (startWith(trim(lines[i]), 'PID')) {
-      start = i + 1
-      break
-    }
-  }
+const deviceState: Record<string, Record<string, any>> = {}
 
-  // older version of top command
-  if (start < 0) {
-    const result: string = await shell(deviceId, 'top -n 1')
-    lines = result.split('\n')
-    for (let i = 0, len = lines.length; i < len; i++) {
-      const line = trim(lines[i])
-      if (startWith(line, 'PID')) {
-        columns = line.split(/\s+/)
-        columns = map(columns, (column) => {
-          column = lowerCase(column)
-          if (column === 'cpu%') {
-            column = '%cpu'
-          } else if (column === 'uid') {
-            column = 'user'
-          } else if (column === 'rss') {
-            column = 'res'
-          }
-          return column
-        })
-        start = i + 1
-        break
-      }
-    }
-  }
-
-  lines = lines.slice(start)
-  const processes: IProcess[] = []
-  each(lines, (line) => {
-    line = trim(line)
-    if (!line) {
-      return
-    }
-    const parts = line.split(/\s+/)
-    const process: any = {}
-    each(columns, (column, index) => {
-      if (column === 'args') {
-        process[column] = parts.slice(index).join(' ')
-      } else {
-        process[column] = parts[index] || ''
-      }
-    })
-    if (process.args === command) {
-      return
-    }
-    processes.push(process)
-  })
-
-  return processes
-}))
-
-export async function init(c: Client) {
-  client = c
-
-  handleEvent('reverseTcp', reverseTcp)
-  handleEvent('getProcesses', getProcesses)
+export function getDeviceStore(deviceId: string, key: string) {
+  return deviceState[deviceId]?.[key]
 }
+
+export function setDeviceStore(deviceId: string, key: string, value: any) {
+  if (!deviceState[deviceId]) deviceState[deviceId] = {}
+  deviceState[deviceId][key] = value
+}
+
+/**
+ * 设备断开/拔插时回收：这里可能握着 socket、pending 请求、forward 端口。
+ * 不清会越攒越多，重连后还会复用死 socket。
+ */
+export function deleteDeviceStore(deviceId: string) {
+  const entry = deviceState[deviceId]
+  const disposable = entry?.deviceClient
+  if (disposable && typeof disposable.dispose === 'function') {
+    try {
+      disposable.dispose()
+    } catch {
+      // 断开阶段的清理失败不影响后续流程
+    }
+  }
+  delete deviceState[deviceId]
+  // 进程/pid 名缓存跟着设备走：重连后 PID 可能复用，旧映射会张冠李戴
+  processCache.delete(deviceId)
+  pidNameCache.delete(deviceId)
+}
+
+// ---------------------------------------------------------------------------
+// adb 二进制定位
+// ---------------------------------------------------------------------------
+
+const ADB_PATH_TTL = 2000
+let adbPathCache: { value: string; at: number } | null = null
+
+export function getAdbPath(): string {
+  // spawn 前都会调这里：缓存 2 秒，省掉每条命令一次 statSync；
+  // 用户改设置后最多 2 秒生效，可接受
+  if (adbPathCache && Date.now() - adbPathCache.at < ADB_PATH_TTL) {
+    return adbPathCache.value
+  }
+  let bin = resolveResources(
+    process.platform === 'win32' ? 'adb/adb.exe' : 'adb/adb'
+  )
+  const custom = settingsStore.get('adbPath')
+  // 只接受文件名为 adb / adb.exe 的普通文件：设置写错时不能变成任意可执行文件
+  if (
+    custom === 'adb' ||
+    (custom &&
+      custom.trim() !== '' &&
+      (path.basename(custom) === 'adb' ||
+        path.basename(custom) === 'adb.exe') &&
+      fs.existsSync(custom) &&
+      fs.statSync(custom).isFile())
+  ) {
+    bin = custom
+  }
+  adbPathCache = { value: bin, at: Date.now() }
+  return bin
+}
+
+function spawnAdbProcess(args: string[]) {
+  // 直接给参数数组（shell:false）：不经过 cmd.exe，避免 %、&、|、^ 被解释
+  return childProcess.spawn(getAdbPath(), args, {
+    env: { ...process.env },
+    windowsHide: true,
+  })
+}
+
+function decode(chunks: Buffer[]): string {
+  return decodeAdbOutput(chunks)
+}
+
+/** 先 SIGTERM，2 秒后还在就 SIGKILL，避免 adb 卡在 USB 读写时留下僵尸进程。 */
+function terminate(cp: childProcess.ChildProcess) {
+  try {
+    cp.kill()
+  } catch {
+    // 进程可能已经退出
+  }
+  const hard = setTimeout(() => {
+    try {
+      cp.kill('SIGKILL')
+    } catch {
+      // ignore
+    }
+  }, 2000)
+  hard.unref?.()
+}
+
+// ---------------------------------------------------------------------------
+// shell：文本命令（带超时、退出码）
+// ---------------------------------------------------------------------------
 
 export async function shell(
   deviceId: string,
@@ -128,25 +149,28 @@ export async function shell(
   timeoutMs = 15000
 ): Promise<string | string[]> {
   logger.debug('shell', cmd)
+  if (!client) throw new Error('adb client 未初始化')
 
-  const cmds: string[] = isStr(cmd) ? [cmd] : cmd
-  // 空数组会拼出 `shell:`（空命令）= 交互式 shell，永远不会结束
-  if (!cmds.length) return []
+  const commands = typeof cmd === 'string' ? [cmd] : cmd
+  // 空数组会拼出 `adb shell`（交互式 shell），永远不结束
+  if (commands.length === 0) return []
 
   const device = await client.getDevice(deviceId)
+  const socket = await device.shell(commands.join(`\necho "${SEPARATOR}"\n`))
+  // 超时 destroy(error) 后 readAll 会走 reject，但 socket 自身的 error 事件
+  // 如果没有监听器会冒成 unhandled：这里兜一层，不影响 readAll 的监听
+  socket.on('error', () => {})
 
-  const socket = await device.shell(cmds.join('\necho "devicedock_separator"\n'))
-  // 设备半死不活时 readAll 会永远等不到 end：用 race 保证 shell() 一定会在超时后 reject
-  let timer: any = null
-  let output: string
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let raw: string
   try {
-    output = (
+    raw = (
       await Promise.race([
         Adb.util.readAll(socket),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             try {
-              // destroy(err) 才会触发 readAll 的 error 分支；无参 destroy 只发 close
+              // 必须带 error 参数，readAll 才会走 reject 分支
               socket.destroy(new Error('adb shell timeout'))
             } catch {
               // ignore
@@ -160,197 +184,248 @@ export async function shell(
     if (timer) clearTimeout(timer)
   }
 
-  if (isStr(cmd)) {
-    return trim(output)
-  }
-
-  return map(output.split('devicedock_separator'), (val) => trim(val))
+  if (typeof cmd === 'string') return raw.trim()
+  return raw.split(SEPARATOR).map((part) => part.trim())
 }
 
-// shell() 只拿得到 stdout、没有退出码：rm / pm disable / settings put 失败时会被当成成功。
-// 这里在命令尾追加哨兵行回传 $?，非 0 直接抛错，让上层 UI 能报错而不是假成功。
+/**
+ * 带退出码的 shell：adb 的 shell 协议不返回退出码，所以在命令末尾追加
+ * `echo "__devicedock_exit:$?"`，解析最后一行。非 0 直接抛错。
+ */
 export async function shellChecked(
   deviceId: string,
   command: string,
   timeoutMs = 15000
 ): Promise<string> {
-  const marker = '__devicedock_exit'
   const output = await shell(
     deviceId,
-    `${command}; echo "${marker}:$?"`,
+    `${command}; echo "${EXIT_MARKER}:$?"`,
     timeoutMs
   )
   const lines = output.split('\n')
   let code = 0
+  const markerPattern = new RegExp(`^\\s*${EXIT_MARKER}:(\\d+)\\s*$`)
   for (let i = lines.length - 1; i >= 0; i--) {
-    const matched = lines[i].match(/^\s*__devicedock_exit:(\d+)\s*$/)
-    if (matched) {
-      code = toNum(matched[1])
+    const m = lines[i].match(markerPattern)
+    if (m) {
+      code = Number(m[1])
       lines.splice(i, 1)
       break
     }
   }
-  const text = trim(lines.join('\n'))
+  const text = lines.join('\n').trim()
   if (code !== 0) {
     throw new Error(`命令执行失败（exit ${code}）：${text || command}`)
   }
   return text
 }
 
+// ---------------------------------------------------------------------------
+// 端口转发
+// ---------------------------------------------------------------------------
+
 export async function forwardTcp(deviceId: string, remote: string) {
+  if (!client) throw new Error('adb client 未初始化')
   const device = await client.getDevice(deviceId)
   const forwards = await device.listForwards()
-
-  for (let i = 0, len = forwards.length; i < len; i++) {
-    const forward = forwards[i]
-    if (forward.remote === remote && forward.serial === deviceId) {
-      return toNum(forward.local.replace('tcp:', ''))
-    }
-  }
+  const existing = forwards.find(
+    (item) => item.remote === remote && item.serial === deviceId
+  )
+  if (existing) return Number(existing.local.replace('tcp:', ''))
 
   const port = await getPort()
-  const local = `tcp:${port}`
-  await device.forward(local, remote)
-
+  await device.forward(`tcp:${port}`, remote)
   return port
 }
 
 export const reverseTcp: IpcReverseTcp = async function (deviceId, remote) {
+  if (!client) throw new Error('adb client 未初始化')
   const device = await client.getDevice(deviceId)
   const reverses = await device.listReverses()
-
-  for (let i = 0, len = reverses.length; i < len; i++) {
-    const reverse = reverses[i]
-    if (reverse.remote === remote) {
-      return toNum(reverse.local.replace('tcp:', ''))
-    }
-  }
+  const existing = reverses.find((item) => item.remote === remote)
+  if (existing) return Number(existing.local.replace('tcp:', ''))
 
   const port = await getPort()
-  const local = `tcp:${port}`
-  await device.reverse(remote, local)
-
+  await device.reverse(remote, `tcp:${port}`)
   return port
 }
 
-const deviceStore: types.PlainObj<any> = {}
+// ---------------------------------------------------------------------------
+// 进程列表
+// ---------------------------------------------------------------------------
 
-export function getDeviceStore(deviceId: string, key: string) {
-  return deviceStore[deviceId] && deviceStore[deviceId][key]
+type TopColumn = {
+  key: string
+  /** args 列吃掉行尾剩余内容（进程名里可能有空格） */
+  rest?: boolean
 }
 
-export function setDeviceStore(deviceId: string, key: string, value: any) {
-  if (!deviceStore[deviceId]) {
-    deviceStore[deviceId] = {}
-  }
-  deviceStore[deviceId][key] = value
+const TOP_COLUMNS: TopColumn[] = [
+  { key: 'pid' },
+  { key: '%cpu' },
+  { key: 'time+' },
+  { key: 'res' },
+  { key: 'user' },
+  { key: 'name' },
+  { key: 'args', rest: true },
+]
+
+function normalizeColumn(raw: string): string {
+  const lower = raw.toLowerCase()
+  if (lower === 'cpu%') return '%cpu'
+  if (lower === 'uid') return 'user'
+  if (lower === 'rss') return 'res'
+  return lower
 }
 
-// 设备拔掉/隧道断开时回收：deviceClient 里握着一条 socket 和 pending 请求，
-// 不清理的话反复插拔设备会一直攒着（旧 forward 端口、死 socket 也会被复用）
-export function deleteDeviceStore(deviceId: string) {
-  const entry = deviceStore[deviceId]
-  if (entry && entry.deviceClient && typeof entry.deviceClient.dispose === 'function') {
-    try {
-      entry.deviceClient.dispose()
-    } catch {
-      // ignore
+/**
+ * 从 top 输出里找表头 + 数据行。
+ * 新版 toybox 支持 `top -o`，表头就是参数里的列；老版本只认默认列，
+ * 需要按实际表头映射（CPU%/UID/RSS 等写法不一样）。
+ */
+function parseTop(output: string, columns: TopColumn[]): IProcess[] {
+  const lines = output.split('\n')
+  let start = -1
+  let active = columns
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!/^PID\b/.test(line)) continue
+    start = i + 1
+    // 表头和请求的列不一致（老 top）：以设备实际输出为准
+    const header = line.split(/\s+/).map(normalizeColumn)
+    if (header.join(',') !== columns.map((c) => c.key).join(',')) {
+      active = header.map((key, index) => ({
+        key,
+        rest: index === header.length - 1,
+      }))
     }
+    break
   }
-  delete deviceStore[deviceId]
+  if (start < 0) return []
+
+  const rows: IProcess[] = []
+  for (const raw of lines.slice(start)) {
+    const line = raw.trim()
+    if (!line) continue
+    const parts = line.split(/\s+/)
+    const row: any = {}
+    active.forEach((column, index) => {
+      row[column.key] = column.rest
+        ? parts.slice(index).join(' ')
+        : parts[index] || ''
+    })
+    rows.push(row as IProcess)
+  }
+  return rows
 }
 
-export function getAdbPath() {
-  let bin = isWindows
-    ? resolveResources('adb/adb.exe')
-    : resolveResources('adb/adb')
-  const adbPath = settingsStore.get('adbPath')
-  // 只接受名为 adb / adb.exe 的普通文件，避免被设置成任意可执行文件
-  if (
-    adbPath === 'adb' ||
-    (!isStrBlank(adbPath) &&
-      (path.basename(adbPath) === 'adb' ||
-        path.basename(adbPath) === 'adb.exe') &&
-      fs.existsSync(adbPath) &&
-      fs.statSync(adbPath).isFile())
-  ) {
-    bin = adbPath
+async function fetchProcesses(deviceId: string): Promise<IProcess[]> {
+  const command =
+    'top -b -n 1' + TOP_COLUMNS.map((c) => ` -o ${c.key}`).join('')
+  const modern = await shell(deviceId, command)
+  let rows = parseTop(String(modern), TOP_COLUMNS)
+  if (!rows.length) {
+    // 老 top 不支持 -b/-o：退回到默认列输出
+    const legacy = await shell(deviceId, 'top -n 1')
+    rows = parseTop(String(legacy), TOP_COLUMNS)
   }
-  return bin
+  // 跳过 top 自己：它的 args 就是上面那条命令
+  return rows.filter((row) => (row as any).args !== command)
 }
 
-export function spawnAdb(
-  args: string[],
-  timeoutMs = 60000
-): Promise<{
+const PROCESS_TTL = 1500
+const processCache = new Map<
+  string,
+  { at: number; promise: Promise<IProcess[]> }
+>()
+
+export const getProcesses: IpcGetProcesses = (deviceId: string) => {
+  // 1.5 秒内复用同一份快照：进程页 5 秒轮询 + 并发刷新不会重复跑 top，
+  // 超过 TTL 一定要重新取，否则页面永远停在第一次的进程列表
+  const hit = processCache.get(deviceId)
+  if (hit && Date.now() - hit.at < PROCESS_TTL) return hit.promise
+
+  const promise = fetchProcesses(deviceId)
+  const entry = { at: Date.now(), promise }
+  processCache.set(deviceId, entry)
+  // 失败不留在缓存里，下次调用重新试
+  promise.catch(() => {
+    if (processCache.get(deviceId) === entry) processCache.delete(deviceId)
+  })
+  return promise
+}
+
+const PID_NAME_TTL = 5000
+const pidNameCache = new Map<
+  string,
+  { at: number; promise: Promise<Record<string, string>> }
+>()
+
+export function getPidNames(deviceId: string) {
+  const hit = pidNameCache.get(deviceId)
+  if (hit && Date.now() - hit.at < PID_NAME_TTL) return hit.promise
+
+  const promise = getProcesses(deviceId).then((list) => {
+    const names: Record<string, string> = {}
+    for (const item of list) names[item.pid] = item.name
+    return names
+  })
+  const entry = { at: Date.now(), promise }
+  pidNameCache.set(deviceId, entry)
+  promise.catch(() => {
+    if (pidNameCache.get(deviceId) === entry) pidNameCache.delete(deviceId)
+  })
+  return promise
+}
+
+// ---------------------------------------------------------------------------
+// 原始进程调用：文本 / 流式 / 二进制
+// ---------------------------------------------------------------------------
+
+export type AdbResult = {
   stdout: string
   stderr: string
   code: number | null
   timedOut: boolean
-}> {
-  const bin = getAdbPath()
+}
 
+export function spawnAdb(args: string[], timeoutMs = 60000): Promise<AdbResult> {
   return new Promise((resolve, reject) => {
-    // 直接 spawn 参数数组（shell:false）：
-    // 不再经过 cmd.exe，避免 % 变量展开、& | ^ 等特殊字符问题，也少一层进程开销
-    const cp = childProcess.spawn(bin, args, {
-      env: { ...process.env },
-      windowsHide: true,
-    })
+    const cp = spawnAdbProcess(args)
+    const out: Buffer[] = []
+    const err: Buffer[] = []
+    let settled = false
 
-    // 先收集原始字节，结束时整体解码：
-    // adb 输出是 UTF-8；cmd.exe 的报错是 GBK（中文 Windows），
-    // 逐块用 fatal 解码会在多字节字符被切分时误判成 GBK，导致乱码。
-    const outChunks: Buffer[] = []
-    const errChunks: Buffer[] = []
-    let done = false
-
-    cp.stdout?.on('data', (data: Buffer) => outChunks.push(data))
-    cp.stderr?.on('data', (data: Buffer) => errChunks.push(data))
-
-    // 编码判定与解码逻辑抽到 common/adbParse（有单元测试），这里只保留调用名
-    const decodeAll = decodeAdbOutput
-
-    // 兜底超时：设备/隧道卡死时不能再无限等待
     const timer = setTimeout(() => {
-      if (done) return
-      done = true
-      try {
-        cp.kill()
-      } catch {
-        // ignore
-      }
-      // adb 偶尔不响应 SIGTERM（卡在 USB 读写）：2 秒后再补一刀，别留下僵尸进程
-      const hardKill = setTimeout(() => {
-        try {
-          cp.kill('SIGKILL')
-        } catch {
-          // ignore
-        }
-      }, 2000)
-      hardKill.unref?.()
+      if (settled) return
+      settled = true
+      terminate(cp)
       resolve({
-        stdout: decodeAll(outChunks),
-        stderr: (decodeAll(errChunks) + '\n[timeout]').trim(),
+        stdout: decode(out),
+        stderr: (decode(err) + '\n[timeout]').trim(),
         code: -1,
         timedOut: true,
       })
     }, timeoutMs)
 
-    cp.on('error', (err) => {
-      if (done) return
-      done = true
+    cp.stdout?.on('data', (chunk: Buffer) => out.push(chunk))
+    cp.stderr?.on('data', (chunk: Buffer) => err.push(chunk))
+
+    cp.on('error', (error) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
-      reject(err)
+      reject(error)
     })
 
     cp.on('close', (code) => {
-      if (done) return
-      done = true
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       resolve({
-        stdout: decodeAll(outChunks),
-        stderr: decodeAll(errChunks),
+        stdout: decode(out),
+        stderr: decode(err),
         code,
         timedOut: false,
       })
@@ -358,31 +433,25 @@ export function spawnAdb(
   })
 }
 
-// 流式版：全盘 find 可能要跑几十秒，边读边把「找到几个」报给界面，
-// 否则用户只能盯着一个转圈猜是不是卡死了。
-// onSpawn 把「立即结束这次搜索」的句柄交给调用方：用户继续输入时新搜索
-// 可以杀掉上一次还在设备上遍历整盘的 find，避免进程越堆越多、越搜越慢。
+/**
+ * 流式版：全盘 find 要跑几十秒，边读边把结果推给界面。
+ * onSpawn 把「提前结束」的句柄交给调用方，用户继续输入时可以杀掉上一次遍历。
+ */
 export function spawnAdbLines(
   args: string[],
   timeoutMs: number,
   onLine: (line: string) => void,
   onSpawn?: (kill: () => void) => void
 ): Promise<{ code: number | null; timedOut: boolean }> {
-  const bin = getAdbPath()
-
   return new Promise((resolve, reject) => {
-    const cp = childProcess.spawn(bin, args, {
-      env: { ...process.env },
-      windowsHide: true,
-    })
-    let done = false
-    // 按字节缓冲到换行再解码：逐 chunk 解码会在多字节字符中间切开，
-    // 中文文件名会变成乱码/替换符（decodeAdbOutput 自己的注释就警告过）。
-    let rest: Buffer = Buffer.alloc(0)
+    const cp = spawnAdbProcess(args)
+    let settled = false
+    // 按字节缓冲到换行再解码：逐 chunk 解码会把 UTF-8 汉字切成两半
+    let pending: Buffer = Buffer.alloc(0)
 
     const finish = (code: number | null, timedOut: boolean) => {
-      if (done) return
-      done = true
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       try {
         cp.kill()
@@ -392,43 +461,40 @@ export function spawnAdbLines(
       resolve({ code, timedOut })
     }
 
-    const timer = setTimeout(() => {
-      finish(-1, true)
-    }, timeoutMs)
-
+    const timer = setTimeout(() => finish(-1, true), timeoutMs)
     if (onSpawn) onSpawn(() => finish(null, false))
 
     cp.stdout?.on('data', (chunk: Buffer) => {
-      rest = Buffer.concat([rest, chunk])
-      let idx = rest.indexOf(0x0a)
+      pending = Buffer.concat([pending, chunk])
+      let idx = pending.indexOf(0x0a)
       while (idx >= 0) {
-        const line = decodeAdbOutput([rest.subarray(0, idx)]).replace(/\r$/, '')
-        rest = rest.subarray(idx + 1)
+        const line = decode([pending.subarray(0, idx)]).replace(/\r$/, '')
+        pending = pending.subarray(idx + 1)
         if (line.trim()) onLine(line)
-        idx = rest.indexOf(0x0a)
+        idx = pending.indexOf(0x0a)
       }
-      // 没有换行的超长行兜底，避免异常输出把内存吃满
-      if (rest.length > 1024 * 1024) {
-        const line = decodeAdbOutput([rest])
-        rest = Buffer.alloc(0)
+      // 没有换行的超长行：兜底输出，避免把内存吃满
+      if (pending.length > 1024 * 1024) {
+        const line = decode([pending])
+        pending = Buffer.alloc(0)
         if (line.trim()) onLine(line)
       }
     })
     cp.stderr?.on('data', () => {})
 
-    cp.on('error', (err) => {
-      if (done) return
-      done = true
+    cp.on('error', (error) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
-      reject(err)
+      reject(error)
     })
 
     cp.on('close', (code) => {
-      if (done) return
-      done = true
+      if (settled) return
+      settled = true
       clearTimeout(timer)
-      if (rest.length) {
-        const line = decodeAdbOutput([rest]).replace(/\r$/, '')
+      if (pending.length) {
+        const line = decode([pending]).replace(/\r$/, '')
         if (line.trim()) onLine(line)
       }
       resolve({ code, timedOut: false })
@@ -436,53 +502,50 @@ export function spawnAdbLines(
   })
 }
 
-export async function isRooted(deviceId: string): Promise<boolean> {
-  const id = await shell(deviceId, 'id')
-  return contain(id, 'uid=0')
-}
-
-// 二进制安全版：exec-out 拉文件不能走 decodeAdbOutput（会把内容按 UTF-8/GBK 解码破坏掉）
+/** 二进制安全：exec-out 拉文件时绝不能走文本解码，否则内容会被破坏。 */
 export function spawnAdbBuffer(
   args: string[],
   timeoutMs = 60000
 ): Promise<{ buffer: Buffer; code: number | null; timedOut: boolean }> {
-  const bin = getAdbPath()
-
   return new Promise((resolve, reject) => {
-    const cp = childProcess.spawn(bin, args, {
-      env: { ...process.env },
-      windowsHide: true,
-    })
+    const cp = spawnAdbProcess(args)
     const chunks: Buffer[] = []
-    let done = false
+    let settled = false
 
     const timer = setTimeout(() => {
-      if (done) return
-      done = true
-      try {
-        cp.kill()
-      } catch {
-        // ignore
-      }
+      if (settled) return
+      settled = true
+      terminate(cp)
       resolve({ buffer: Buffer.concat(chunks), code: -1, timedOut: true })
     }, timeoutMs)
 
-    cp.stdout?.on('data', (data: Buffer) => chunks.push(data))
-    // stderr 丢弃即可：run-as 的报错会体现在 code != 0
+    cp.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+    // stderr 不参与结果：run-as 的报错会体现在退出码上
     cp.stderr?.on('data', () => {})
 
-    cp.on('error', (err) => {
-      if (done) return
-      done = true
+    cp.on('error', (error) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
-      reject(err)
+      reject(error)
     })
 
     cp.on('close', (code) => {
-      if (done) return
-      done = true
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       resolve({ buffer: Buffer.concat(chunks), code, timedOut: false })
     })
   })
+}
+
+export async function isRooted(deviceId: string): Promise<boolean> {
+  const id = await shell(deviceId, 'id')
+  return String(id).includes('uid=0')
+}
+
+export async function init(c: Client) {
+  client = c
+  handleEvent('reverseTcp', reverseTcp)
+  handleEvent('getProcesses', getProcesses)
 }
