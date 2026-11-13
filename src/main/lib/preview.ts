@@ -1,3 +1,10 @@
+/**
+ * 侧栏实时预览：设备端 screenrecord 直接出 H264（Annex B），主进程只转发，
+ * 渲染层用 WebCodecs 解码到 canvas。
+ *
+ * 480p/30fps 的设备端编码 + 主机解码比每秒一张 1080p PNG 轻，画面连续。
+ * 同一时刻只保留一路预览（侧栏只看当前设备）。
+ */
 import { spawn, ChildProcess } from 'node:child_process'
 import { app } from 'electron'
 import log from 'share/common/log'
@@ -8,13 +15,13 @@ import { getAdbPath } from './adb/base'
 
 const logger = log('preview')
 
-// 侧栏预览流：screenrecord 直接出 H264（Annex B），主进程只做转发，
-// 渲染层用 WebCodecs 解码到 canvas。480p/30fps 的设备端编码和主机解码都比
-// 每秒一张 1080p PNG 轻，画面连续。
 const SIZE = '480x270'
 const BIT_RATE = 600000
+// screenrecord 单次最长 180 秒，留 1 秒余量主动重启
 const TIME_LIMIT = 179
 const MAX_FAILURES = 4
+const FLUSH_INTERVAL = 30
+const RESTART_DELAY = 300
 
 interface PreviewSession {
   deviceId: string
@@ -28,48 +35,50 @@ interface PreviewSession {
 let session: PreviewSession | null = null
 let restartTimer: ReturnType<typeof setTimeout> | null = null
 
-function flushChunk(s: PreviewSession) {
-  if (session !== s || s.stopped || !s.pending.length) return
-  const buf = Buffer.concat(s.pending)
-  s.pending = []
+function flushChunk(target: PreviewSession) {
+  if (session !== target || target.stopped || !target.pending.length) return
+  const buf = Buffer.concat(target.pending)
+  target.pending = []
   window.sendTo(
     'main',
     'previewChunk',
-    s.deviceId,
+    target.deviceId,
     buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   )
 }
 
-function scheduleFlush(s: PreviewSession) {
-  if (s.flush) return
+function scheduleFlush(target: PreviewSession) {
+  if (target.flush) return
   // 30ms 合并一次：screenrecord 的 H264 分片很小，逐片 IPC 太碎
-  s.flush = setTimeout(() => {
-    s.flush = null
-    flushChunk(s)
-  }, 30)
+  target.flush = setTimeout(() => {
+    target.flush = null
+    flushChunk(target)
+  }, FLUSH_INTERVAL)
 }
 
-function onExit(s: PreviewSession | null) {
-  if (!s || session !== s || s.stopped) return
-  s.failures++
-  if (s.failures >= MAX_FAILURES) {
-    logger.warn('preview stream failed, fall back to png', s.deviceId)
-    window.sendTo('main', 'previewError', s.deviceId)
+function handleExit(target: PreviewSession | null) {
+  if (!target || session !== target || target.stopped) return
+
+  target.failures++
+  if (target.failures >= MAX_FAILURES) {
+    logger.warn('preview stream failed, fall back to png', target.deviceId)
+    window.sendTo('main', 'previewError', target.deviceId)
     stop()
     return
   }
+
   restartTimer = setTimeout(() => {
     restartTimer = null
-    if (session === s && !s.stopped) spawnStream(s)
-  }, 300)
+    if (session === target && !target.stopped) spawnStream(target)
+  }, RESTART_DELAY)
 }
 
-function spawnStream(s: PreviewSession) {
+function spawnStream(target: PreviewSession) {
   const proc = spawn(
     getAdbPath(),
     [
       '-s',
-      s.deviceId,
+      target.deviceId,
       'exec-out',
       'screenrecord',
       '--output-format=h264',
@@ -78,62 +87,66 @@ function spawnStream(s: PreviewSession) {
       `--time-limit=${TIME_LIMIT}`,
       '-',
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
+    { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
   )
-  s.proc = proc
+  target.proc = proc
   let stderr = ''
 
   proc.stdout?.on('data', (chunk: Buffer) => {
-    if (session !== s || s.stopped) return
-    // 能持续收到码流说明流是健康的，清掉重启计数
-    s.failures = 0
-    s.pending.push(chunk)
-    scheduleFlush(s)
+    if (session !== target || target.stopped) return
+    // 持续收到码流说明流是健康的，清零重启计数
+    target.failures = 0
+    target.pending.push(chunk)
+    scheduleFlush(target)
   })
   proc.stderr?.on('data', (chunk: Buffer) => {
     if (stderr.length < 800) stderr += chunk.toString('utf8')
   })
   proc.on('error', (e) => {
-    logger.warn('preview spawn error', s.deviceId, e.message)
-    onExit(s)
+    logger.warn('preview spawn error', target.deviceId, e.message)
+    handleExit(target)
   })
   proc.on('exit', (code) => {
-    if (session !== s || s.stopped) return
+    if (session !== target || target.stopped) return
     if (stderr) {
-      logger.warn('preview exit', s.deviceId, code, stderr.slice(0, 300))
+      logger.warn('preview exit', target.deviceId, code, stderr.slice(0, 300))
     }
-    onExit(s)
+    handleExit(target)
   })
-  logger.info('preview stream start', s.deviceId)
+  logger.info('preview stream start', target.deviceId)
 }
 
 function stop() {
-  const s = session
+  const current = session
   session = null
+
   if (restartTimer) {
     clearTimeout(restartTimer)
     restartTimer = null
   }
-  if (!s) return
-  s.stopped = true
-  if (s.flush) {
-    clearTimeout(s.flush)
-    s.flush = null
+  if (!current) return
+
+  current.stopped = true
+  if (current.flush) {
+    clearTimeout(current.flush)
+    current.flush = null
   }
-  s.pending = []
-  if (s.proc) {
+  current.pending = []
+  if (current.proc) {
     try {
-      s.proc.kill('SIGTERM')
+      current.proc.kill('SIGTERM')
     } catch {
       // 进程可能已经退出
     }
   }
 }
 
-const startPreviewStream: IpcStartPreviewStream = async function (deviceId) {
+const startPreviewStream: IpcStartPreviewStream = async (deviceId) => {
+  // 同一设备已经在推：不重复启动
   if (session && session.deviceId === deviceId && !session.stopped) return
+
   stop()
-  const s: PreviewSession = {
+  const target: PreviewSession = {
     deviceId,
     proc: null,
     stopped: false,
@@ -141,11 +154,11 @@ const startPreviewStream: IpcStartPreviewStream = async function (deviceId) {
     pending: [],
     flush: null,
   }
-  session = s
-  spawnStream(s)
+  session = target
+  spawnStream(target)
 }
 
-const stopPreviewStream: IpcStopPreviewStream = async function () {
+const stopPreviewStream: IpcStopPreviewStream = async () => {
   stop()
 }
 
