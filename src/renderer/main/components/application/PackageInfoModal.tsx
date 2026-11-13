@@ -5,7 +5,6 @@ import Style from './PackageInfoModal.module.scss'
 import defaultIcon from '../../../assets/default-icon.png'
 import fileSize from 'licia/fileSize'
 import md5 from 'licia/md5'
-import convertBin from 'licia/convertBin'
 import dateFormat from 'licia/dateFormat'
 import { IModalProps } from 'share/common/types'
 import { Copyable } from '../common/Copyable'
@@ -15,9 +14,19 @@ interface IProps extends IModalProps {
   packageInfo: IPackageInfo
 }
 
+const DATE_FORMAT = 'yyyy-mm-dd HH:MM:ss'
+
+function item(title: string, value: string | number) {
+  return (
+    <div className={Style.item}>
+      <span>{title}</span>
+      <Copyable className={Style.value}>{value}</Copyable>
+    </div>
+  )
+}
+
 export default function PackageInfoModal(props: IProps) {
   const { packageInfo } = props
-
   const signature = packageInfo.signatures[0]
 
   return createPortal(
@@ -42,37 +51,28 @@ export default function PackageInfoModal(props: IProps) {
         </div>
       </div>
       {item(t('sysPackage'), packageInfo.system ? t('yes') : t('no'))}
-      {packageInfo.minSdkVersion &&
+      {!!packageInfo.minSdkVersion &&
         item(t('minSdkVersion'), packageInfo.minSdkVersion)}
-      {packageInfo.targetSdkVersion &&
+      {!!packageInfo.targetSdkVersion &&
         item(t('targetSdkVersion'), packageInfo.targetSdkVersion)}
       {item(
         t('firstInstallTime'),
-        dateFormat(
-          new Date(packageInfo.firstInstallTime),
-          'yyyy-mm-dd HH:MM:ss'
-        )
+        dateFormat(new Date(packageInfo.firstInstallTime), DATE_FORMAT)
       )}
       {item(
         t('lastUpdateTime'),
-        dateFormat(new Date(packageInfo.lastUpdateTime), 'yyyy-mm-dd HH:MM:ss')
+        dateFormat(new Date(packageInfo.lastUpdateTime), DATE_FORMAT)
       )}
       {item(t('apkSize'), fileSize(packageInfo.apkSize))}
       {item(t('appSize'), fileSize(packageInfo.appSize))}
       {item(t('dataSize'), fileSize(packageInfo.dataSize))}
       {item(t('cacheSize'), fileSize(packageInfo.cacheSize))}
       {signature &&
-        item(t('signature') + ' MD5', md5(convertBin(signature, 'Unit8Array')))}
+        item(
+          t('signature') + ' MD5',
+          md5(signature)
+        )}
     </LunaModal>,
     document.body
-  )
-}
-
-function item(title: string, value: string | number) {
-  return (
-    <div className={Style.item}>
-      <span>{title}</span>
-      <Copyable className={Style.value}>{value}</Copyable>
-    </div>
   )
 }

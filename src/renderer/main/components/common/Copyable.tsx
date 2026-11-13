@@ -9,12 +9,15 @@ interface IProps {
   className?: string
 }
 
+/** 可点击复制的文本块。延迟 200ms 是为了避开双击选中文本。 */
 export const Copyable: FC<PropsWithChildren<IProps>> = function (props) {
   const valueRef = useRef<HTMLDivElement>(null)
 
   function copyValue() {
     setTimeout(() => {
-      copy(valueRef.current!.innerText)
+      const element = valueRef.current
+      if (!element) return
+      copy(element.innerText)
       notify(t('copied'), { icon: 'info' })
     }, 200)
   }
