@@ -1,15 +1,9 @@
+/**
+ * CPU 采样：/proc/stat 两次差分算负载，/proc/cpuinfo 之外再读 cpufreq 拿实时频率。
+ * 温度从 dumpsys thermalservice 里取 CPU* 传感器的平均值。
+ */
 import sleep from 'licia/sleep'
-import each from 'licia/each'
-import map from 'licia/map'
-import trim from 'licia/trim'
-import toNum from 'licia/toNum'
-import startWith from 'licia/startWith'
 import { shell } from './base'
-import types from 'licia/types'
-import average from 'licia/average'
-import identity from 'licia/identity'
-import stripNum from 'licia/stripNum'
-import isEmpty from 'licia/isEmpty'
 
 const DEFAULT_PERIOD = 50
 
@@ -18,23 +12,22 @@ export async function getCpuLoads(
   allCpus: any[],
   period = 0
 ) {
-  const cpuLoads: number[] = []
-  if (!period) {
-    period = DEFAULT_PERIOD
-  }
+  // 两次采样间隔默认 50ms：太短会落在同一个 jiffy 里算出 0/0
+  await sleep(period || DEFAULT_PERIOD)
+  const next = await getCpus(deviceId, false)
 
-  await sleep(period)
-  const newAllCpus = await getCpus(deviceId, false)
-  each(allCpus, (cpu, idx) => {
-    // 热插拔/离线核会导致第二次采样少核：缺的核按 0 处理，不能让 index 越界
-    cpuLoads[idx] = newAllCpus[idx] ? calculateCpuLoad(cpu, newAllCpus[idx]) : 0
-  })
-  return cpuLoads
+  const loads: number[] = []
+  for (let i = 0; i < allCpus.length; i++) {
+    // 热插拔/离线核会导致第二次采样少核：缺的核按 0，不能让 index 越界
+    loads[i] = next[i] ? calculateCpuLoad(allCpus[i], next[i]) : 0
+  }
+  return loads
 }
 
-function calculateCpuLoad(lastCpu, cpu) {
+function calculateCpuLoad(lastCpu: any, cpu: any) {
   const lastTimes = lastCpu.times
   const times = cpu.times
+
   const lastLoad =
     lastTimes.user +
     lastTimes.sys +
@@ -43,95 +36,72 @@ function calculateCpuLoad(lastCpu, cpu) {
     lastTimes.iowait +
     lastTimes.softirq
   const lastTick = lastLoad + lastTimes.idle
-  const load =
-    times.user +
-    times.sys +
-    times.nice +
-    times.irq +
-    times.iowait +
-    times.softirq
-  const tick = load + times.idle
-  const delta = tick - lastTick
-  // 两次采样落在同一个 jiffy 内时是 0/0，不能把 NaN 渲染到界面上
-  if (!delta || delta < 0) return 0
 
+  const load =
+    times.user + times.sys + times.nice + times.irq + times.iowait + times.softirq
+  const tick = load + times.idle
+
+  const delta = tick - lastTick
+  // 同 jiffy 内采样是 0/0，不能把 NaN 渲染到界面
+  if (!delta || delta < 0) return 0
   return (load - lastLoad) / delta
 }
 
 export async function getCpus(deviceId: string, speed = true) {
-  const result: string = await shell(deviceId, 'cat /proc/stat')
-  const lines = result.split('\n')
+  const result = String(await shell(deviceId, 'cat /proc/stat'))
   const cpus: any[] = []
 
-  each(lines, (line) => {
-    line = trim(line)
-    if (!startWith(line, 'cpu')) {
-      return
-    }
+  for (const raw of result.split('\n')) {
+    const line = raw.trim()
+    if (!line.startsWith('cpu')) continue
 
     const parts = line.split(/\s+/)
-    if (parts[0] === 'cpu') {
-      return
-    }
+    // 第一行是汇总的 cpu，不含编号
+    if (parts[0] === 'cpu') continue
 
-    const cpu: any = {}
-    cpu.times = {
-      user: toNum(parts[1]),
-      nice: toNum(parts[2]),
-      sys: toNum(parts[3]),
-      idle: toNum(parts[4]),
-      iowait: toNum(parts[5]),
-      irq: toNum(parts[6]),
-      softirq: toNum(parts[7]),
-    }
+    cpus.push({
+      times: {
+        user: Number(parts[1]) || 0,
+        nice: Number(parts[2]) || 0,
+        sys: Number(parts[3]) || 0,
+        idle: Number(parts[4]) || 0,
+        iowait: Number(parts[5]) || 0,
+        irq: Number(parts[6]) || 0,
+        softirq: Number(parts[7]) || 0,
+      },
+    })
+  }
 
-    cpus.push(cpu)
-  })
-
-  if (speed) {
-    const freqs = await shell(
-      deviceId,
-      map(cpus, (cpu, idx) => {
-        return `cat /sys/devices/system/cpu/cpu${idx}/cpufreq/scaling_cur_freq`
-      })
+  if (speed && cpus.length) {
+    const commands = cpus.map(
+      (_, i) => `cat /sys/devices/system/cpu/cpu${i}/cpufreq/scaling_cur_freq`
     )
-    const speeds = map(freqs, (line) => {
-      const v = trim(line)
-      return v ? Math.floor(toNum(v) / 1000) : undefined
-    })
-
-    each(cpus, (cpu, idx) => {
+    const freqs = (await shell(deviceId, commands)) as string[]
+    for (let i = 0; i < cpus.length; i++) {
+      const value = String(freqs[i] ?? '').trim()
       // 按下标对齐：某一核读不到频率时不能把后面的核整体错位
-      cpu.speed = speeds[idx]
-    })
+      cpus[i].speed = value ? Math.floor(Number(value) / 1000) : undefined
+    }
   }
 
   return cpus
 }
 
-const regTemperature =
+const TEMPERATURE_RE =
   /Temperature\{mValue=([\d.]+),\s*mType=(\d+),\s*mName=(\w+)/
+
 export async function getCpuTemperature(deviceId: string) {
-  const thermal = await shell(deviceId, 'dumpsys thermalservice')
-  const lines = thermal.split('\n')
+  const thermal = String(await shell(deviceId, 'dumpsys thermalservice'))
+  const values: number[] = []
 
-  const cpuTemperatures: types.PlainObj<number> = {}
-
-  for (let i = 0, len = lines.length; i < len; i++) {
-    const line = lines[i]
-    const match = line.match(regTemperature)
-    if (match) {
-      const name = match[3]
-      const value = toNum(match[1])
-      if (startWith(name, 'CPU')) {
-        cpuTemperatures[name] = value
-      }
-    }
+  for (const line of thermal.split('\n')) {
+    const matched = line.match(TEMPERATURE_RE)
+    if (!matched) continue
+    if (!matched[3].startsWith('CPU')) continue
+    values.push(Number(matched[1]) || 0)
   }
 
-  if (isEmpty(cpuTemperatures)) {
-    return 0
-  }
-
-  return stripNum(average(...map(cpuTemperatures, identity)), 3)
+  if (!values.length) return 0
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length
+  return Number(average.toFixed(3))
 }

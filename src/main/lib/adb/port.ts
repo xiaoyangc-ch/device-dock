@@ -1,43 +1,39 @@
-import { Client, Forward, Reverse } from '@devicefarmer/adbkit'
+/**
+ * 端口转发列表：直接转发给 adbkit 的 forward/reverse 能力。
+ */
+import { Client } from '@devicefarmer/adbkit'
 import {
   IpcForward,
   IpcListForwards,
   IpcListReverses,
   IpcReverse,
 } from 'common/types'
-import map from 'licia/map'
 import { handleEvent } from 'share/main/lib/util'
 
 let client: Client
 
-const listForwards: IpcListForwards = async function (deviceId) {
+const listForwards: IpcListForwards = async (deviceId) => {
   const device = await client.getDevice(deviceId)
-  const forwards = await device.listForwards()
-  return map(forwards, (forward: Forward) => {
-    return {
-      local: forward.local,
-      remote: forward.remote,
-    }
-  })
+  return (await device.listForwards()).map((item) => ({
+    local: item.local,
+    remote: item.remote,
+  }))
 }
 
-const forward: IpcForward = async function (deviceId, local, remote) {
+const forward: IpcForward = async (deviceId, local, remote) => {
   const device = await client.getDevice(deviceId)
   await device.forward(local, remote)
 }
 
-const listReverses: IpcListReverses = async function (deviceId) {
+const listReverses: IpcListReverses = async (deviceId) => {
   const device = await client.getDevice(deviceId)
-  const reverses = await device.listReverses()
-  return map(reverses, (reverse: Reverse) => {
-    return {
-      local: reverse.local,
-      remote: reverse.remote,
-    }
-  })
+  return (await device.listReverses()).map((item) => ({
+    local: item.local,
+    remote: item.remote,
+  }))
 }
 
-const reverse: IpcReverse = async function (deviceId, remote, local) {
+const reverse: IpcReverse = async (deviceId, remote, local) => {
   const device = await client.getDevice(deviceId)
   await device.reverse(remote, local)
 }
