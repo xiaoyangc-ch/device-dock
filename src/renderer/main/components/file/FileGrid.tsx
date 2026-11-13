@@ -1,3 +1,7 @@
+/**
+ * 文件列表（列表视图）：多选、键盘剪贴板、按容器尺寸自适应。
+ * 行数据里 name 是 DOM 节点：名称列要同时放图标和文件名。
+ */
 import LunaDataGrid from 'luna-data-grid/react'
 import DataGrid, { DataGridNode } from 'luna-data-grid'
 import { useEffect, useMemo, useRef } from 'react'
@@ -32,31 +36,35 @@ const columns = [
 ]
 
 function nameCell(file: IFile) {
-  const el = document.createElement('span')
-  el.className = Style.nameCell
+  const cell = document.createElement('span')
+  cell.className = Style.nameCell
+
   const mime = file.mime || ''
-  // 设备返回的缩略图只有图片有意义；其它类型是浅灰的通用图标，
-  // 在深色主题下就是一块白方，统一改用 Lucide 线性图标。
+  // 设备返回的缩略图只有图片有意义；其它类型是浅灰通用图标，
+  // 深色主题下就是一块白方，统一改用线性图标
   if (file.thumbnail && mime.startsWith('image/')) {
     const img = document.createElement('img')
     img.className = Style.nameIcon
     img.src = file.thumbnail
-    el.appendChild(img)
+    cell.appendChild(img)
   } else {
     const icon = document.createElement('span')
     icon.className = `${Style.nameIcon} ${iconOf(file)}`
-    el.appendChild(icon)
+    cell.appendChild(icon)
   }
+
   const label = document.createElement('span')
   label.className = Style.nameText
+  // 文件名来自设备：用 textContent，不要拼 HTML
   label.textContent = file.name
-  el.appendChild(label)
-  return el
+  cell.appendChild(label)
+  return cell
 }
 
 export default function FileGrid(props: IFileGridProps) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<DataGrid | null>(null)
+  // id → IFile：行数据里只有 id，回查原对象才知道是不是目录
   const fileMap = useRef(new Map<string, IFile>())
 
   const data = useMemo(() => {
@@ -64,6 +72,7 @@ export default function FileGrid(props: IFileGridProps) {
     const rows = props.files.map((file) => {
       const id = props.pathOf(file)
       map.set(id, file)
+
       return {
         id,
         name: nameCell(file),
@@ -81,14 +90,14 @@ export default function FileGrid(props: IFileGridProps) {
     return rows
   }, [props.files])
 
-  // 列宽和可见行数都依赖容器尺寸：挂载后补一次 fit，尺寸变化时再 fit。
-  // 少了这步会出现「名称列只剩几像素、只画一行」的半渲染状态。
+  // 列宽和可见行数都依赖容器尺寸：挂载后补一次 fit，尺寸变化再 fit，
+  // 少了这步会出现「名称列只剩几像素、只画一行」的半渲染状态
   useResizeSensor(wrapRef, () => gridRef.current?.fit())
   useEffect(() => {
+    // 首次挂载时容器可能还没完成布局
     const timer = setTimeout(() => gridRef.current?.fit(), 50)
     return () => clearTimeout(timer)
   }, [])
-
   useEffect(() => {
     gridRef.current?.fit()
   }, [data.length])
@@ -97,9 +106,11 @@ export default function FileGrid(props: IFileGridProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
+
       // 页签只是 visibility:hidden，监听器仍在：文件页没显示时不能抢 Ctrl+C/V
       const wrap = wrapRef.current
       if (!wrap || getComputedStyle(wrap).visibility === 'hidden') return
+
       const active = document.activeElement as HTMLElement | null
       if (
         active &&
@@ -109,6 +120,7 @@ export default function FileGrid(props: IFileGridProps) {
       ) {
         return
       }
+
       const key = e.key.toLowerCase()
       if (key === 'c') {
         e.preventDefault()
@@ -126,22 +138,26 @@ export default function FileGrid(props: IFileGridProps) {
         return
       }
       if (key !== 'a') return
+
       const grid: any = gridRef.current
       if (!grid) return
+
       const nodes: any[] = (grid.displayNodes || grid.nodes || []).filter(
         (node: any) => node.selectable
       )
       if (!nodes.length) return
+
       e.preventDefault()
       grid.setSelectedNodes(nodes)
     }
+
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [props.onCopy, props.onCut, props.onPaste])
 
   const toFiles = (nodes: DataGridNode | DataGridNode[]) => {
-    const arr = Array.isArray(nodes) ? nodes : [nodes]
-    return arr
+    const list = Array.isArray(nodes) ? nodes : [nodes]
+    return list
       .map((node) => fileMap.current.get(String(node.data.id)))
       .filter((file): file is IFile => !!file)
   }

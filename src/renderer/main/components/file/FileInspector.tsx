@@ -1,3 +1,6 @@
+/**
+ * 右侧详情面板：单个文件/目录属性 + 预览，多选时显示汇总。
+ */
 import { observer } from 'mobx-react-lite'
 import fileSize from 'licia/fileSize'
 import dateFormat from 'licia/dateFormat'
@@ -26,8 +29,6 @@ interface IProps {
 export default observer(function FileInspector(props: IProps) {
   const { files, file, url, showPreview } = props
   const count = files.length
-  // 多选统计用一次遍历，别在 JSX 里 filter 两遍
-  const dirCount = files.filter((item) => item.directory).length
 
   if (!count) {
     return (
@@ -42,8 +43,15 @@ export default observer(function FileInspector(props: IProps) {
     )
   }
 
+  // 多选汇总
   if (count > 1 || !file) {
-    const total = files.reduce((sum, item) => sum + (item.size || 0), 0)
+    let totalSize = 0
+    let dirCount = 0
+    for (const item of files) {
+      totalSize += item.size || 0
+      if (item.directory) dirCount++
+    }
+
     return (
       <aside className={Style.inspector}>
         <div className={Style.head}>
@@ -63,7 +71,7 @@ export default observer(function FileInspector(props: IProps) {
               <div className={Style.multiTitle}>
                 {t('selectedItems', { count })}
               </div>
-              <div className={Style.multiMeta}>{fileSize(total)}</div>
+              <div className={Style.multiMeta}>{fileSize(totalSize)}</div>
             </div>
           </div>
           <div className={Style.props}>
@@ -86,7 +94,10 @@ export default observer(function FileInspector(props: IProps) {
             <span className="icon-download" />
             {t('downloadSelected')}
           </button>
-          <button className={Style.dangerBtn} onClick={() => props.onDelete(files)}>
+          <button
+            className={Style.dangerBtn}
+            onClick={() => props.onDelete(files)}
+          >
             <span className="icon-delete" />
             {t('deleteSelected')}
           </button>
@@ -126,7 +137,9 @@ export default observer(function FileInspector(props: IProps) {
             <div className={Style.previewInfo}>
               <div className={Style.name}>{file.name}</div>
               <div className={Style.meta}>
-                {isDir ? typeOf(file, t('directory')) : fileSize(file.size || 0)}
+                {isDir
+                  ? typeOf(file, t('directory'))
+                  : fileSize(file.size || 0)}
                 {previewable && !showPreview ? ' · ' + t('previewOff') : ''}
               </div>
             </div>
@@ -167,7 +180,10 @@ export default observer(function FileInspector(props: IProps) {
 
       <div className={Style.actions}>
         {isDir ? (
-          <button className={Style.primary} onClick={() => props.onOpen(file)}>
+          <button
+            className={Style.primary}
+            onClick={() => props.onOpen(file)}
+          >
             <span className="icon-folder" />
             {t('openFolder')}
           </button>
@@ -181,7 +197,10 @@ export default observer(function FileInspector(props: IProps) {
               {t('downloadToLocal')}
             </button>
             {isApk && (
-              <button className={Style.btn} onClick={() => props.onInstall(file)}>
+              <button
+                className={Style.btn}
+                onClick={() => props.onInstall(file)}
+              >
                 <span className="icon-package" />
                 {t('installToDevice')}
               </button>
