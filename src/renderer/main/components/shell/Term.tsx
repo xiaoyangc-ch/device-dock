@@ -1,3 +1,7 @@
+/**
+ * 单个终端标签：xterm + adb shell 会话。
+ * 组件挂载时创建会话、卸载时 kill；可见性变化时重新 fit（隐藏时 fit 会算错尺寸）。
+ */
 import { observer } from 'mobx-react-lite'
 import store from '../../store'
 import { Terminal, ITheme } from '@xterm/xterm'
@@ -23,10 +27,21 @@ interface ITermProps {
   onCreate: (terminal: Terminal) => void
 }
 
+function getTheme(dark = false): ITheme {
+  return {
+    selectionForeground: '#fff',
+    selectionBackground: colorPrimary,
+    // 背景跟随主题底色，避免页面和 xterm 之间出现一条浅色接缝
+    background: dark ? '#1c1e22' : '#ffffff',
+    foreground: dark ? colorTextDark : colorText,
+    cursor: dark ? colorTextDark : colorText,
+  }
+}
+
 export default observer(function Term(props: ITermProps) {
-  const terminalRef = useRef<HTMLDivElement>(null)
-  const termRef = useRef<Terminal>(null)
-  const fitAddonRef = useRef<FitAddon>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
   const sessionIdRef = useRef('')
 
   const { device } = store
@@ -42,57 +57,54 @@ export default observer(function Term(props: ITermProps) {
     const fitAddon = new FitAddon()
     fitAddonRef.current = fitAddon
     term.loadAddon(fitAddon)
+
     const fit = () => {
-      const el = terminalRef.current
-      if (el && !isHidden(el)) {
-        fitAddon.fit()
-      }
+      const el = containerRef.current
+      // 隐藏的标签页尺寸为 0：fit 会把 cols/rows 算成 1
+      if (el && !isHidden(el)) fitAddon.fit()
     }
     window.addEventListener('resize', fit)
 
     term.loadAddon(new Unicode11Addon())
     term.unicode.activeVersion = '11'
 
-    term.open(terminalRef.current!)
+    term.open(containerRef.current!)
     termRef.current = term
     props.onCreate(term)
 
-    function onShellData(id, data) {
-      if (sessionIdRef.current !== id) {
-        return
-      }
+    const offShellData = main.on('shellData', (id: string, data: string) => {
+      if (sessionIdRef.current !== id) return
       term.write(data)
-    }
-    const offShellData = main.on('shellData', onShellData)
+    })
 
     let disposed = false
     if (device) {
       main
         .createShell(device.id)
         .then((id) => {
-          // 请求还在路上组件就卸载了：立刻回收，否则设备端留一个永远没人用的 shell
+          // 请求还在路上组件就卸载了：立刻回收，
+          // 否则设备端留一个永远没人用的 shell 进程
           if (disposed) {
             main.killShell(id)
             return
           }
+
           setSessionId(id)
           term.onData((data) => main.writeShell(sessionIdRef.current, data))
-          term.onResize((size) => {
+          term.onResize((size) =>
             main.resizeShell(sessionIdRef.current, size.cols, size.rows)
-          })
+          )
           fit()
         })
         .catch(() => {
-          // 设备掉线：终端留空即可，不能抛出未处理拒绝
+          // 设备掉线：终端留空即可，不能抛未处理拒绝
         })
     }
 
     return () => {
       disposed = true
       offShellData()
-      if (sessionIdRef.current) {
-        main.killShell(sessionIdRef.current)
-      }
+      if (sessionIdRef.current) main.killShell(sessionIdRef.current)
       term.dispose()
       window.removeEventListener('resize', fit)
     }
@@ -105,16 +117,11 @@ export default observer(function Term(props: ITermProps) {
   }, [store.theme])
 
   useEffect(() => {
-    if (fitAddonRef.current && props.visible) {
-      fitAddonRef.current.fit()
-    }
-    if (props.visible) {
-      setTimeout(() => {
-        if (termRef.current) {
-          termRef.current.focus()
-        }
-      }, 500)
-    }
+    if (!props.visible) return
+
+    fitAddonRef.current?.fit()
+    // 等面板显示完成再聚焦，否则 focus 会被隐藏状态吞掉
+    setTimeout(() => termRef.current?.focus(), 500)
   }, [props.visible])
 
   function setSessionId(id: string) {
@@ -122,10 +129,8 @@ export default observer(function Term(props: ITermProps) {
     props.onSessionIdChange(id)
   }
 
-  const onContextMenu = (e: React.MouseEvent) => {
-    if (!device) {
-      return
-    }
+  function onContextMenu(e: React.MouseEvent) {
+    if (!device) return
 
     const term = termRef.current!
     const template: any[] = [
@@ -142,9 +147,7 @@ export default observer(function Term(props: ITermProps) {
         label: t('paste'),
         click: async () => {
           const text = await navigator.clipboard.readText()
-          if (text) {
-            main.writeShell(sessionIdRef.current, text)
-          }
+          if (text) main.writeShell(sessionIdRef.current, text)
         },
       },
       {
@@ -153,27 +156,24 @@ export default observer(function Term(props: ITermProps) {
           term.selectAll()
         },
       },
-      {
-        type: 'separator',
-      },
+      { type: 'separator' },
       {
         label: t('reset'),
         click() {
-          if (sessionIdRef.current) {
-            main.killShell(sessionIdRef.current)
-          }
+          if (sessionIdRef.current) main.killShell(sessionIdRef.current)
+
           term.reset()
-          if (device) {
-            main
-              .createShell(device.id)
-              .then((id) => {
-                setSessionId(id)
-              })
-              .catch(() => {
-                // 设备掉线：重置后留空终端，不能产生未处理拒绝
-              })
-            term.focus()
-          }
+          if (!device) return
+
+          main
+            .createShell(device.id)
+            .then((id) => {
+              setSessionId(id)
+            })
+            .catch(() => {
+              // 设备掉线：重置后留空终端，不能产生未处理拒绝
+            })
+          term.focus()
         },
       },
       {
@@ -189,36 +189,11 @@ export default observer(function Term(props: ITermProps) {
   }
 
   return (
-    <>
-      <div
-        className={Style.term}
-        style={{ display: props.visible ? 'block' : 'none' }}
-        ref={terminalRef}
-        onContextMenu={onContextMenu}
-      />
-    </>
+    <div
+      className={Style.term}
+      style={{ display: props.visible ? 'block' : 'none' }}
+      ref={containerRef}
+      onContextMenu={onContextMenu}
+    />
   )
 })
-
-function getTheme(dark = false) {
-  // 终端背景跟随 3.0 的 --ui-bg，避免页面和 xterm 之间出现一条浅色接缝
-  let theme: ITheme = {
-    background: '#ffffff',
-    foreground: colorText,
-    cursor: colorText,
-  }
-
-  if (dark) {
-    theme = {
-      background: '#1c1e22',
-      foreground: colorTextDark,
-      cursor: colorTextDark,
-    }
-  }
-
-  return {
-    selectionForeground: '#fff',
-    selectionBackground: colorPrimary,
-    ...theme,
-  }
-}

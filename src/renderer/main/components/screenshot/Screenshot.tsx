@@ -1,3 +1,7 @@
+/**
+ * 截屏页：抓一张 PNG，支持保存/复制/旋转/缩放。
+ * 切设备时会自动重抓；离线设备清空旧图且不弹错误。
+ */
 import { observer } from 'mobx-react-lite'
 import Style from './Screenshot.module.scss'
 import dataUrl from 'licia/dataUrl'
@@ -22,14 +26,16 @@ import PageToolbar, {
   ToolText,
 } from '../layout/PageToolbar'
 
+interface IShot {
+  data: string
+  url: string
+  width: number
+  height: number
+  size: number
+}
+
 export default observer(function Screenshot() {
-  const [image, setImage] = useState<{
-    data: string
-    url: string
-    width: number
-    height: number
-    size: number
-  } | null>(null)
+  const [image, setImage] = useState<IShot | null>(null)
   const imageViewerRef = useRef<ImageViewer>(null)
   const captureSeq = useRef(0)
 
@@ -48,16 +54,20 @@ export default observer(function Screenshot() {
 
   async function recapture() {
     if (!store.device) return
-    // 离线设备抓图必然失败：清掉上一张旧图，不要弹错误提示
+
+    // 离线设备抓图必然失败：清掉上一张旧图，不要弹错误
     if (store.device.type === 'offline') {
       setImage(null)
       return
     }
+
     const seq = ++captureSeq.current
     const deviceId = store.device.id
+
     try {
       const data = await main.screencap(deviceId)
       if (seq !== captureSeq.current || store.device?.id !== deviceId) return
+
       const url = dataUrl.stringify(data, 'image/png')
       loadImg(url, (err, img) => {
         if (seq !== captureSeq.current || store.device?.id !== deviceId) return
@@ -65,6 +75,7 @@ export default observer(function Screenshot() {
           setImage(null)
           return
         }
+
         setImage({
           data,
           url,
@@ -75,7 +86,7 @@ export default observer(function Screenshot() {
         })
       })
     } catch {
-      // 设备掉线/超时：清掉旧图并提示，不能让 useEffect 里留下未处理拒绝
+      // 设备掉线/超时：清旧图并提示，不能让 useEffect 里留未处理拒绝
       setImage(null)
       notify(t('commonErr'), { icon: 'error' })
     }
@@ -155,7 +166,7 @@ export default observer(function Screenshot() {
           <LunaImageViewer
             className={Style.imageViewer}
             image={image.url}
-            onCreate={(imageViewer) => (imageViewerRef.current = imageViewer)}
+            onCreate={(viewer) => (imageViewerRef.current = viewer)}
           />
         ) : (
           <div className={Style.empty}>
