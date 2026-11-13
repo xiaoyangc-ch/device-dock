@@ -121,9 +121,9 @@ export default observer(function DeviceStage() {
     const startPng = () => {
       if (!alive || pngActive) return
       pngActive = true
-      if (pngRequesting) return
-      pngRequesting = true
-      captureLoop()
+      // 不能在这里置 pngRequesting：captureLoop 开头就以它当守卫，
+      // 先置位会让第一次调用立刻 return，PNG 兜底从此永远启动不了
+      pngTimer = setTimeout(captureLoop, 0)
     }
 
     const stopPng = () => {

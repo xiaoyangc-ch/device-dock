@@ -23,12 +23,18 @@ export default observer(function Graph() {
 
     async function sample() {
       timer = null
-      const { cpu, memory } = await main.getCpuAndMem()
-      if (!alive) return
-      dataRef.current.cpu = cpu
-      dataRef.current.mem = memory
-      // 用 setTimeout 串行采样：主进程卡住时不会堆积多个请求
-      timer = setTimeout(sample, 2000)
+      try {
+        const { cpu, memory } = await main.getCpuAndMem()
+        if (!alive) return
+        dataRef.current.cpu = cpu
+        dataRef.current.mem = memory
+      } catch {
+        // 一次采样失败不能停掉整条曲线：保留上一次的值继续下一轮
+      }
+      if (alive) {
+        // 用 setTimeout 串行采样：主进程卡住时不会堆积多个请求
+        timer = setTimeout(sample, 2000)
+      }
     }
 
     sample()

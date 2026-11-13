@@ -94,23 +94,25 @@ export default observer(function Disk() {
               d.temp === null || d.temp === undefined ? '-' : d.temp + '°C',
             hours: d.hours ? t('diskHoursUnit', { count: d.hours }) : '-',
             cycles: d.cycles ? String(d.cycles) : '-',
-            status: (
-              <span
-                className={
-                  d.passed === true
-                    ? Style.statusOk
-                    : d.passed === false
-                      ? Style.statusBad
-                      : Style.statusUnknown
-                }
-              >
-                {d.passed === true
+            // luna-data-grid 只对真实 DOM 节点 appendChild，React 元素会被
+            // String() 成 "[object Object]"；这里直接给 DOM 节点，
+            // 同时排序也能用到 span 的 innerText
+            status: (() => {
+              const el = document.createElement('span')
+              el.className =
+                d.passed === true
+                  ? Style.statusOk
+                  : d.passed === false
+                    ? Style.statusBad
+                    : Style.statusUnknown
+              el.textContent =
+                d.passed === true
                   ? t('diskStatusOk')
                   : d.passed === false
                     ? t('diskStatusBad')
-                    : t('diskStatusUnknown')}
-              </span>
-            ),
+                    : t('diskStatusUnknown')
+              return el
+            })(),
             serial: d.serial || '-',
             // 状态列是 JSX，排序要按纯文本
             statusText: statusText(d.passed),

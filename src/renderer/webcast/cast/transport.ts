@@ -77,7 +77,14 @@ export class SocketStream {
         },
         onData: (data: Uint8Array) => {
           if (!settled) {
-            // 首包要原样交给流：上面 stream 的 enqueue 已经收下，这里只负责放行
+            // ReadableStream 的 start() 只保存了 controller，并没有 enqueue 任何东西：
+            // 首包必须在这里入队再放行，否则它会被永久丢弃——而 scrcpy 视频流的
+            // 首包正好是 dummy byte + 设备名 + codec + 宽高，丢了元数据就解析错位
+            try {
+              controller?.enqueue(data)
+            } catch {
+              // 流已取消：忽略
+            }
             finish()
             return
           }

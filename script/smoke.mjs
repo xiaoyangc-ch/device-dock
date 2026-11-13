@@ -168,7 +168,9 @@ async function main() {
     await sleep(settle)
     const panel = await c.evaluate(readPanelExpr)
     const errors = c.errors.splice(0, c.errors.length)
-    const bad = !panel || panel.crashed || errors.length > 0
+    // 白屏/导航没生效时 panel 存在但内容为空：不能算通过
+    const empty = !panel || panel.textLen < 10
+    const bad = empty || (panel && panel.crashed) || errors.length > 0
     if (bad) failed++
     console.log(
       `${label}: ${JSON.stringify(panel)}${errors.length ? ' errors=' + JSON.stringify(errors.slice(0, 4)) : ''}`

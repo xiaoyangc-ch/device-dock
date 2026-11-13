@@ -89,8 +89,12 @@ export function encodeTouch(
   view.setInt32(14, y)
   view.setUint16(18, width)
   view.setUint16(20, height)
-  // 抬起时不带压力，按下/移动给满压
-  view.setUint16(22, action === TouchAction.Down ? 0 : 65535)
+  // scrcpy 的语义：抬起给 0，按下/移动给满压（up ? 0.0f : 1.0f）。
+  // 写反会让读 getPressure() 的绘图/手写/游戏类应用丢笔或认为没有真实按压
+  view.setUint16(
+    22,
+    action === TouchAction.Up || action === TouchAction.PointerUp ? 0 : 65535
+  )
   view.setUint32(24, 0)
   view.setUint32(28, 0)
   return buf

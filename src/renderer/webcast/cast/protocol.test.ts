@@ -53,10 +53,18 @@ test('触摸：鼠标指针用 -1，多指用正数 id', () => {
   assert.equal(view(finger).getBigInt64(2), BigInt(5))
 })
 
-test('触摸压力：按下给 0、抬起给满值（scrcpy 用它区分 tap 与 move）', () => {
-  assert.equal(view(encodeTouch(TouchAction.Down, 0, 0, 1, 1)).getUint16(22), 0)
+test('触摸压力：按下/移动给满压、抬起给 0（与 scrcpy 一致）', () => {
   assert.equal(
-    view(encodeTouch(TouchAction.Up, 0, 0, 1, 1)).getUint16(22),
+    view(encodeTouch(TouchAction.Down, 0, 0, 1, 1)).getUint16(22),
+    65535
+  )
+  assert.equal(view(encodeTouch(TouchAction.Up, 0, 0, 1, 1)).getUint16(22), 0)
+  assert.equal(
+    view(encodeTouch(TouchAction.PointerUp, 0, 0, 1, 1)).getUint16(22),
+    0
+  )
+  assert.equal(
+    view(encodeTouch(TouchAction.Move, 0, 0, 1, 1)).getUint16(22),
     65535
   )
 })

@@ -9,7 +9,6 @@
  */
 import { Client } from '@devicefarmer/adbkit'
 import fs from 'fs-extra'
-import os from 'node:os'
 import path from 'node:path'
 import { handleEvent } from 'share/main/lib/util'
 import { getUserDataPath } from 'share/main/lib/util'
@@ -171,10 +170,25 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let writable: ReturnType<typeof fs.createWriteStream> | null = null
+      // adbd 卡死 / USB 半断时 transfer 既不 error 也不 finish：
+      // 没有超时的话 finish 永不执行，fileSemaphore 槽位泄漏，
+      // 攒够 5 次之后所有上传下载都停在 waitFileSlot 上，只能重启应用
+      let idle: ReturnType<typeof setTimeout> | null = null
+      const armIdle = () => {
+        if (idle) clearTimeout(idle)
+        idle = setTimeout(
+          () => finish(new Error('传输超时：120 秒没有进展')),
+          120000
+        )
+      }
 
       const finish = (error?: any) => {
         if (settled) return
         settled = true
+        if (idle) {
+          clearTimeout(idle)
+          idle = null
+        }
         release()
         if (error) {
           // 失败时收掉写流和 adbkit 的 sync 传输，否则连接一直挂在 adb server 上
@@ -204,10 +218,12 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
       transfer.on(
         'progress',
         throttle(({ bytesTransferred }) => {
+          armIdle()
           window.sendTo('main', 'updateTransfer', id, bytesTransferred)
         }, 500)
       )
       transfer.on('error', (error) => finish(error))
+      armIdle()
       transfer.pipe(writable)
     })
   } catch (e) {
@@ -217,7 +233,26 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
 }
 
 const openFile: IpcOpenFile = async function (deviceId, devicePath) {
-  const dest = path.join(os.tmpdir(), path.basename(devicePath))
+  // 不能放 os.tmpdir() 且只用 basename：同名文件互相覆盖，
+  // 而且整个仓库没有任何地方删它（预览一个 1.5G 视频就永久多占 1.5G）
+  const dir = getUserDataPath('preview-cache')
+  await fs.ensureDir(dir)
+  const tag = deviceId.replace(/[^\w.-]+/g, '_')
+  // 同一设备只留最近这份预览，避免越积越多
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith(tag + '-')) {
+        await fs.remove(path.join(dir, name)).catch(() => {})
+      }
+    }
+  } catch {
+    // 目录刚建/读失败都不影响打开
+  }
+  const safeName = (path.basename(devicePath) || 'preview').replace(
+    /[^\w.-]+/g,
+    '_'
+  )
+  const dest = path.join(dir, `${tag}-${safeName}`)
   await pullFile(deviceId, devicePath, dest)
   electronShell.openPath(dest)
 }
@@ -226,13 +261,45 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
 // 删除 / 新建
 // ---------------------------------------------------------------------------
 
+// rm -rf 不可逆：设备盘根、内部存储根、系统分区一律拒绝。
+// 渲染层传什么就删什么太危险（面板是 visibility:hidden 保活的，历史上误点过）。
+const PROTECTED_DELETE = new Set([
+  '/',
+  '/sdcard',
+  '/storage',
+  '/storage/emulated',
+  '/storage/emulated/0',
+  '/data',
+  '/data/media',
+  '/data/media/0',
+  '/mnt',
+  '/system',
+  '/vendor',
+  '/product',
+  '/odm',
+  '/apex',
+])
+
+function assertDeletable(devicePath: string) {
+  const nor = devicePath.replace(/\/+$/, '') || '/'
+  if (PROTECTED_DELETE.has(nor)) {
+    throw new Error(`拒绝删除受保护路径：${devicePath}`)
+  }
+  // 只删顶层的 /xxx 也拦掉：那基本都是挂载点或系统目录
+  if (nor.split('/').filter(Boolean).length < 2) {
+    throw new Error(`拒绝删除顶层目录：${devicePath}`)
+  }
+}
+
 const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
+  assertDeletable(devicePath)
   // checked：rm 失败（只读挂载/权限不足）必须报错，不能让 UI 显示删除成功
   await fileShell(deviceId, 'rm', devicePath, undefined, true, 120000)
   resetFileIndex(deviceId)
 }
 
 const deleteDir: IpcDeleteDir = async function (deviceId, devicePath) {
+  assertDeletable(devicePath)
   await fileShell(deviceId, 'rm -rf', devicePath, undefined, true, 600000)
   resetFileIndex(deviceId)
 }
@@ -296,9 +363,23 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false
+      // 同 pullFile：传输卡死时必须有出口，否则信号量泄漏
+      let idle: ReturnType<typeof setTimeout> | null = null
+      const armIdle = () => {
+        if (idle) clearTimeout(idle)
+        idle = setTimeout(
+          () => done(new Error('传输超时：120 秒没有进展')),
+          120000
+        )
+      }
+
       const done = (error?: any) => {
         if (settled) return
         settled = true
+        if (idle) {
+          clearTimeout(idle)
+          idle = null
+        }
         release()
         window.sendTo('main', 'finishTransfer', id, !error)
         if (error) {
@@ -324,10 +405,12 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
       transfer.on(
         'progress',
         throttle(({ bytesTransferred }) => {
+          armIdle()
           window.sendTo('main', 'updateTransfer', id, bytesTransferred)
         }, 500)
       )
       transfer.on('error', (error) => cleanup(error))
+      armIdle()
     })
   } catch (e) {
     release()
@@ -1110,6 +1193,38 @@ function buildDirSet(entries: string[]) {
 
 const fileIndexes = new Map<string, IFileIndex>()
 
+/**
+ * 设备移除时清掉所有按 deviceId 建表的缓存。
+ * 无线设备的 id 是 ip:port，换个端口重连就是新 id：
+ * 旧索引（单设备可达 30 万条路径）既占内存又永远不会再被命中。
+ */
+export function clearDeviceCaches(deviceId: string) {
+  const drop = <T>(map: Map<string, T>) => {
+    for (const key of [...map.keys()]) {
+      if (
+        key === deviceId ||
+        key.startsWith(deviceId + '|') ||
+        key.startsWith(deviceId + '\n') ||
+        key.startsWith(deviceId + '/')
+      ) {
+        map.delete(key)
+      }
+    }
+  }
+  drop(fileIndexes)
+  drop(metaCache)
+  drop(rootsCache)
+  drop(lsFollowCache)
+  drop(findCache)
+  drop(findExecCache)
+  drop(statFormatCache)
+  try {
+    fs.removeSync(fileIndexPath(deviceId))
+  } catch {
+    // 索引文件本来就不存在
+  }
+}
+
 function fileIndexPath(deviceId: string) {
   return path.join(
     getUserDataPath('file-index'),
@@ -1862,8 +1977,11 @@ async function readDataDir(deviceId: string, target: string) {
   if (target.startsWith('/data/data/')) return readDataDataDir(deviceId, target)
 
   const stat = await statFile(deviceId, '/data')
+  // 面包屑返回上一级时拿到的是 /data/local（没有尾斜杠），
+  // 以前只匹配带斜杠的写法，会掉进下面的兜底，显示一份假的 data/app/local 列表
+  const nor = target.replace(/\/+$/, '') || '/'
 
-  if (target === '/data/local/') {
+  if (nor === '/data/local') {
     return [
       {
         name: 'tmp',
@@ -1875,13 +1993,20 @@ async function readDataDir(deviceId: string, target: string) {
     ]
   }
 
-  return ['data', 'app', 'local'].map((name) => ({
-    name,
-    directory: true,
-    mtime: stat.mtime,
-    mode: stat.mode,
-    size: stat.size,
-  }))
+  if (nor === '/data') {
+    // /data 根：其余子目录是应用数据（SELinux 拒绝），只暴露这三个入口
+    return ['data', 'app', 'local'].map((name) => ({
+      name,
+      directory: true,
+      mtime: stat.mtime,
+      mode: stat.mode,
+      size: stat.size,
+    }))
+  }
+
+  // 其它 /data/*（/data/media、/data/system 等）没有特殊通道：
+  // 真读一次，读不到就让界面显示无权限，不要伪造条目
+  return readDirSorted(deviceId, nor)
 }
 
 async function readDataAppDir(deviceId: string, target: string) {

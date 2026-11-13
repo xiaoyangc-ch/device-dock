@@ -149,7 +149,7 @@ export function init() {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) {
       win.focus()
-      contextMenu(x, y, template)
+      contextMenu(x, y, template, event.sender)
     }
   })
   ipcMain.handle('closeWin', (event) => {

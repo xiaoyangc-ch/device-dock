@@ -91,7 +91,18 @@ export const getPackages: IpcGetPackages = async (deviceId, system = true) => {
 // 启停 / 安装 / 卸载 / 清数据 / 禁用
 // ---------------------------------------------------------------------------
 
+/**
+ * 包名会直接拼进设备端 shell 命令：设备返回异常包名（含 ; $() 空格）时
+ * 这些命令会执行任意语句。统一在入口校验，不要只在 getPackageIcon 里做。
+ */
+function assertPackageName(pkg: string) {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.]*$/.test(pkg) || pkg.length > 255) {
+    throw new Error(`非法包名：${pkg}`)
+  }
+}
+
 const stopPackage: IpcStopPackage = async (deviceId, pkg) => {
+  assertPackageName(pkg)
   await shell(deviceId, `am force-stop ${pkg}`)
 }
 
@@ -120,11 +131,13 @@ const uninstallPackage: IpcUninstallPackage = async (deviceId, pkg) => {
 }
 
 const disablePackage: IpcDisablePackage = async (deviceId, pkg) => {
+  assertPackageName(pkg)
   // checked：系统应用禁用失败必须报错，以前一律当成功
   await shellChecked(deviceId, `pm disable-user ${pkg}`)
 }
 
 const enablePackage: IpcEnablePackage = async (deviceId, pkg) => {
+  assertPackageName(pkg)
   await shellChecked(deviceId, `pm enable ${pkg}`)
 }
 
@@ -133,6 +146,7 @@ const enablePackage: IpcEnablePackage = async (deviceId, pkg) => {
  * 返回 `pkg/Activity`，直接可以给 `am start` 用。
  */
 async function getMainComponent(deviceId: string, pkg: string) {
+  assertPackageName(pkg)
   const out = String(
     await shell(deviceId, `dumpsys package ${pkg} | grep -A 1 MAIN`)
   )
@@ -155,8 +169,22 @@ function iconDir() {
   return path.join(app.getPath('userData'), 'icon-cache')
 }
 
-function iconCacheFile(pkg: string) {
-  return path.join(iconDir(), encodeURIComponent(pkg) + '.txt')
+// key 必须带设备：两台设备装同包名不同版本/不同图标时会串图，
+// 磁盘缓存同样要按设备分开
+function iconCacheFile(deviceId: string, pkg: string) {
+  return path.join(iconDir(), encodeURIComponent(`${deviceId}|${pkg}`) + '.txt')
+}
+
+// 每条 base64 最多 2MB，没有上限会一直涨
+const ICON_MEM_MAX = 200
+
+function rememberIcon(key: string, url: string) {
+  iconMem.set(key, url)
+  while (iconMem.size > ICON_MEM_MAX) {
+    const oldest = iconMem.keys().next().value
+    if (oldest === undefined) break
+    iconMem.delete(oldest)
+  }
 }
 
 /** 给 APK 里的图标候选打分：mipmap 优先、launcher 命名优先、高 dpi 优先、方形优先。 */
@@ -238,13 +266,14 @@ function readApkIcon(apk: string): Promise<{ data: Buffer; mime: string } | null
   })
 }
 
-async function readIconCache(pkg: string) {
-  const hit = iconMem.get(pkg)
+async function readIconCache(deviceId: string, pkg: string) {
+  const key = `${deviceId}|${pkg}`
+  const hit = iconMem.get(key)
   if (hit) return hit
   try {
-    const text = await fs.readFile(iconCacheFile(pkg), 'utf8')
+    const text = await fs.readFile(iconCacheFile(deviceId, pkg), 'utf8')
     if (text.startsWith('data:image/')) {
-      iconMem.set(pkg, text)
+      rememberIcon(key, text)
       return text
     }
   } catch {
@@ -253,13 +282,36 @@ async function readIconCache(pkg: string) {
   return ''
 }
 
+/** 设备移除 / 卸载重装时清掉该设备的图标缓存（内存 + 磁盘） */
+export function clearIconCache(deviceId: string) {
+  const prefix = deviceId + '|'
+  for (const key of [...iconMem.keys()]) {
+    if (key.startsWith(prefix)) iconMem.delete(key)
+  }
+  iconDirCleanup(deviceId)
+}
+
+function iconDirCleanup(deviceId: string) {
+  const prefix = encodeURIComponent(deviceId + '|')
+  fs.readdir(iconDir())
+    .then((names) => {
+      for (const name of names) {
+        if (name.startsWith(prefix)) {
+          fs.unlink(path.join(iconDir(), name)).catch(() => undefined)
+        }
+      }
+    })
+    .catch(() => undefined)
+}
+
 export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
   // 包名会拼进 pm 命令和本地缓存文件名，先卡死字符集
-  if (!/^[A-Za-z0-9_.]+$/.test(pkg)) return ''
+  assertPackageName(pkg)
+  const key = `${deviceId}|${pkg}`
 
-  const cached = await readIconCache(pkg)
+  const cached = await readIconCache(deviceId, pkg)
   if (cached) return cached
-  const running = iconPending.get(pkg)
+  const running = iconPending.get(key)
   if (running) return running
 
   const task = (async () => {
@@ -283,9 +335,9 @@ export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
       if (!icon) return ''
 
       const url = `data:${icon.mime};base64,${icon.data.toString('base64')}`
-      iconMem.set(pkg, url)
+      rememberIcon(key, url)
       fs.mkdir(iconDir(), { recursive: true })
-        .then(() => fs.writeFile(iconCacheFile(pkg), url))
+        .then(() => fs.writeFile(iconCacheFile(deviceId, pkg), url))
         .catch(() => undefined)
       return url
     } catch {
@@ -293,9 +345,9 @@ export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
     } finally {
       fs.unlink(tmp).catch(() => undefined)
     }
-  })().finally(() => iconPending.delete(pkg))
+  })().finally(() => iconPending.delete(key))
 
-  iconPending.set(pkg, task)
+  iconPending.set(key, task)
   return task
 }
 

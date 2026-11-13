@@ -433,6 +433,16 @@ async function getPackageDiskStats(deviceId: string) {
 /** 成功才缓存端口：失败不能缓存 rejection，否则这台设备永远起不来文件服务。 */
 const fileServerPorts = new Map<string, number>()
 
+/**
+ * adb kill-server 会把所有 TCP forward 清掉，但设备端的 app_process 还活着，
+ * isFileServerRunning 走的是 localabstract、看不出 forward 已经没了——
+ * 缓存里的端口会变成死链，图标 URL 全部 404。重启 adb 前后必须清掉。
+ */
+export function resetTransportCaches() {
+  fileServerPorts.clear()
+  diskStatsCache.clear()
+}
+
 async function getFileServerPort(deviceId: string): Promise<number> {
   const cached = fileServerPorts.get(deviceId)
   if (cached) {

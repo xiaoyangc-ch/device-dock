@@ -49,6 +49,8 @@ export default observer(function Logcat() {
   // 导出用的影子副本：不能无限长，否则长会话迟早 OOM
   const entriesRef = useRef<any[]>([])
   const logcatIdRef = useRef('')
+  // 每次 open 会话自增：迟到的 openLogcat 用它对账，避免设备端留下常驻会话
+  const sessionRef = useRef(0)
 
   const { device } = store
 
@@ -90,6 +92,8 @@ export default observer(function Logcat() {
 
     return () => {
       disposed = true
+      // 作废所有在途的 openLogcat（restart 里的 gen 对账靠它）
+      sessionRef.current++
       offEntries()
       if (logcatIdRef.current) {
         main.closeLogcat(logcatIdRef.current).catch(() => {})
@@ -144,6 +148,7 @@ export default observer(function Logcat() {
   }
 
   function restart() {
+    const gen = ++sessionRef.current
     if (logcatIdRef.current) {
       main.closeLogcat(logcatIdRef.current).catch(() => {})
       clear()
@@ -153,6 +158,12 @@ export default observer(function Logcat() {
     main
       .openLogcat(device.id)
       .then((id) => {
+        // 期间换了设备/卸载了面板：这个会话没人认领，必须自己关掉，
+        // 否则设备端留一条常驻 logcat 一直往 socket 写
+        if (gen !== sessionRef.current) {
+          main.closeLogcat(id).catch(() => {})
+          return
+        }
         logcatIdRef.current = id
         setLogcatId(id)
         setPaused(false)

@@ -18,7 +18,13 @@ export type IpcGetLanguage = () => string
 export type IpcGetTheme = () => string
 export type IpcGetStore = (name: string) => any
 export type IpcSetStore = (name: string, value: any) => void
-export type IpcShowContextMenu = (x: number, y: number, template: any) => void
+export type IpcShowContextMenu = (
+  x: number,
+  y: number,
+  template: any,
+  // 发起菜单的 webContents：主进程内部透传，渲染层不会传
+  sender?: any
+) => void
 export type IpcShowOpenDialog = (
   options: OpenDialogOptions
 ) => Promise<OpenDialogReturnValue>

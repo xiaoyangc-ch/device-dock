@@ -10,6 +10,7 @@ import {
   BrowserWindow,
   BrowserWindowConstructorOptions,
   screen,
+  shell,
 } from 'electron'
 import types from 'licia/types'
 import defaults from 'licia/defaults'
@@ -189,6 +190,20 @@ export function create(opts: IWinOptions) {
   logger.debug('create', opts.name, options)
   const win = new BrowserWindow(options)
 
+  // 所有窗口都挂了 preload（含 pushFile/deleteFile/diskRun）：
+  // 不锁导航就等于把全部 IPC 能力交给任何能打开的网页。
+  // 外部链接交给系统浏览器，window.open 一律拒绝，主框架只允许留在应用自己的页面。
+  const webContents = win.webContents
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+  webContents.on('will-navigate', (event, url) => {
+    if (!isAppUrl(url)) event.preventDefault()
+  })
+
   const useOverlay = !!(winOptions.titlebar && winOptions.nativeTitlebarOverlay && isMac)
   ;(win as any).nativeTitlebarOverlay = useOverlay
   ;(win as any).customTitlebar =
@@ -268,6 +283,13 @@ export function sendTo(name: string, channel: string, ...args: any[]) {
   if (win && !win.isDestroyed()) {
     win.webContents.send(channel, ...args)
   }
+}
+
+// 应用自己的页面：打包/构建后都走 file:// 加载 index.html；
+// dev server 与 devtools 调试页在 localhost，一并放行。
+function isAppUrl(url: string) {
+  if (url.startsWith('file://')) return true
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)
 }
 
 export function loadPage(win: BrowserWindow, q: types.PlainObj<string> = {}) {

@@ -299,9 +299,35 @@ async function getBattery(deviceId: string) {
 // 截屏
 // ---------------------------------------------------------------------------
 
-const screencap: IpcScreencap = async (deviceId) => {
+/**
+ * adbd 卡住时 readAll 永不 settle，而侧栏每 4 秒发一次请求：
+ * 没有超时就会攒下一堆挂死的 transport + PNG Buffer，必须带超时。
+ */
+async function readScreencap(deviceId: string, timeoutMs = 8000) {
   const device = await client.getDevice(deviceId)
-  const buf = await Adb.util.readAll(await device.screencap())
+  const socket: any = await device.screencap()
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      Adb.util.readAll(socket) as Promise<Buffer>,
+      new Promise<Buffer>((_, reject) => {
+        timer = setTimeout(() => {
+          try {
+            socket?.destroy?.(new Error('screencap timeout'))
+          } catch {
+            // ignore
+          }
+          reject(new Error('截屏超时'))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+const screencap: IpcScreencap = async (deviceId) => {
+  const buf = await readScreencap(deviceId)
   return buf.toString('base64')
 }
 
@@ -310,21 +336,30 @@ const screencap: IpcScreencap = async (deviceId) => {
  * 和上一帧完全一致时返回 null，渲染层不再解码重绘。
  */
 const screencapRaw: IpcScreencapRaw = async (deviceId) => {
-  let device
   try {
-    device = await client.getDevice(deviceId)
+    // 只探测设备可用性：adb 重启/设备刚移除时下一轮再试，
+    // 不要每秒抛一次 IPC 错误
+    await client.getDevice(deviceId)
   } catch {
-    // adb 重启/设备刚移除：下一轮再试，不要每秒抛一次 IPC 错误
     return null
   }
 
-  const buf = await Adb.util.readAll(await device.screencap())
+  let buf: Buffer
+  try {
+    buf = await readScreencap(deviceId)
+  } catch {
+    // 侧栏预览：这一帧失败就跳过，下一轮再试，不要把 IPC 打红
+    return null
+  }
   const hash = createHash('md5').update(buf).digest('hex')
   if (lastFrameHash.get(deviceId) === hash) return null
   lastFrameHash.set(deviceId, hash)
 
   // Buffer 可能来自池化内存：切出精确区间再交给 IPC
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  return buf.buffer.slice(
+    buf.byteOffset,
+    buf.byteOffset + buf.byteLength
+  ) as ArrayBuffer
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +606,9 @@ async function restartAdbServer() {
   deviceInfoCache.clear()
   prewarmed.clear()
   lastFrameHash.clear()
+  // kill-server 会清掉所有 TCP forward：设备端文件服务的缓存端口随之失效，
+  // 不清的话应用页图标会一直拿死端口去请求
+  server.resetTransportCaches()
 
   await client.kill()
   await client.version()
@@ -641,6 +679,10 @@ export async function init() {
     webCast.stopWebCast(deviceId).catch(() => {})
     base.deleteDeviceStore(deviceId)
     server.clearPackageCaches(deviceId)
+    // 按 deviceId 建表的缓存都要清：file 的全盘索引/stat 缓存（单设备可达 30 万条）、
+    // 应用图标（内存 + disk），否则无线设备换个端口重连就留下一份永久驻留的旧数据
+    file.clearDeviceCaches(deviceId)
+    packageAdb.clearIconCache(deviceId)
     prewarmed.delete(deviceId)
     deviceInfoCache.delete(deviceId)
     lastFrameHash.delete(deviceId)

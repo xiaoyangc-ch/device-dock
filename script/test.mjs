@@ -20,8 +20,9 @@ async function walk(dir, out = []) {
 
 const files = await walk(path.join(root, 'src'))
 if (!files.length) {
-  console.log('没有找到 *.test.ts')
-  process.exit(0)
+  // 静默通过最危险：目录改名/glob 失效时 npm test 依旧绿灯
+  console.error('没有找到 *.test.ts：测试无法执行，按失败处理')
+  process.exit(1)
 }
 
 const outdir = path.join(root, '.test-build')
