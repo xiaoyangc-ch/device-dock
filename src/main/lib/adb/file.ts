@@ -13,6 +13,7 @@ import path from 'node:path'
 import { handleEvent } from 'share/main/lib/util'
 import { getUserDataPath } from 'share/main/lib/util'
 import { assertDeletable } from 'common/guards'
+import { takeBatch } from 'common/batch'
 import { shell as electronShell } from 'electron'
 import {
   isRooted,
@@ -1519,9 +1520,8 @@ async function buildFileIndex(
     // 渲染层每接一批都会重建表格行：整盘搜索时 600ms 一次才不卡
     if (!force && now - lastEmit < 600) return
     lastEmit = now
-    if (sent < EMIT_MAX) {
-      // slice 超出长度会自动截断，不用先判 pending.length
-      const batch = pending.slice(0, EMIT_MAX - sent)
+    const batch = takeBatch(pending, sent, EMIT_MAX)
+    if (batch.length) {
       sent += batch.length
       emit(batch)
     }
