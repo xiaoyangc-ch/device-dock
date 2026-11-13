@@ -9,6 +9,9 @@
 - 排障环境变量 `APM_NO_PREWARM` 改为 `DEVICEDOCK_NO_PREWARM`；投屏配置键 `apmCast` 改为 `deviceCast`
 - 图标、关于页、NOTICE、README 换成新品牌
 - 代码层自有化：`src/main`（约 7k 行）、`src/share`（2.6k 行）、`src/renderer`（8.4k 行）全部重写为自有实现；`server/` 的 Kotlin 日志 tag 去掉上游标识并重编 dex
+- 投屏窗口重构：拆成 `cast/protocol`（线协议）、`cast/control`（控制通道）、`cast/transport`（流适配）、`cast/session`（会话状态机）、`cast/input`（指针/键盘）、`cast/recorder`（录制）六层，替代原来的单文件巨型 effect
+- 样式层自有化：25 个 `*.module.scss` 换新类名体系并扁平化嵌套，同步组件引用；`theme.scss` 的 token 与 3.0 壳层的 `--ui-*` 变量保留
+
 - 修复全盘搜索的存储视图重复：`/sdcard`、`/mnt/pass_through`、`/mnt/androidwritable`、`/mnt/installer`、`/mnt/user` 是同一份存储的运行时视图，整根 `find -L` 会让同一个文件出现 7 条，改为容器根只取真实子目录 + 按名字排除视图
 - 全盘搜索二次查询走内存索引，实测 1.1 秒建索引、2ms 命中
 
