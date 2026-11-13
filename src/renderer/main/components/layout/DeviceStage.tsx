@@ -1,3 +1,12 @@
+/**
+ * 侧栏设备卡：实时预览 + 设备信息 + 快速入口。
+ *
+ * 预览两级方案：
+ * 1. H264 流：主进程 screenrecord → pagefile，这里用 WebCodecs 解到 canvas（约 30fps）；
+ * 2. PNG 回退：流拿不到（老设备没有 screenrecord、编码器被占、首帧超时）时，
+ *    每秒一张 screencap。
+ * 两者共用一块 canvas/img，收到首帧就切到流并停掉截图轮询。
+ */
 import { observer } from 'mobx-react-lite'
 import { useEffect, useRef, useState } from 'react'
 import { t } from 'common/util'
@@ -7,10 +16,12 @@ import Style from './DeviceStage.module.scss'
 import useLatency from './useLatency'
 
 const START_CODE = new Uint8Array([0, 0, 0, 1])
+const FIRST_FRAME_TIMEOUT = 3500
 
 function concatBytes(parts: Uint8Array[]) {
   let length = 0
   for (const part of parts) length += part.length
+
   const out = new Uint8Array(length)
   let offset = 0
   for (const part of parts) {
@@ -31,6 +42,7 @@ export default observer(function DeviceStage() {
   const [resolution, setResolution] = useState('')
   const urlRef = useRef('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
   // 离线设备不探测延迟：只会每 3 秒失败一次，侧栏显示 -- 即可
   const ms = useLatency(
     device && device.type !== 'offline' ? device.id : ''
@@ -44,6 +56,7 @@ export default observer(function DeviceStage() {
     setUrl('')
     setStreamReady(false)
     setResolution('')
+
     const canvas = canvasRef.current
     canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
 
@@ -57,24 +70,32 @@ export default observer(function DeviceStage() {
     }
 
     let alive = true
-    // ---- PNG 回退：流被设备拒绝/解码失败时继续用每秒一张截图 ----
-    let pngTimer: ReturnType<typeof setTimeout>
-    let pngAlive = false
-    let pngRunning = false
 
-    const tick = async () => {
-      if (!alive || !pngAlive) return
+    // ---------- PNG 回退 ----------
+    let pngTimer: ReturnType<typeof setTimeout>
+    let pngActive = false
+    let pngRequesting = false
+
+    const captureLoop = async () => {
+      if (!alive || !pngActive) return
+
+      // 窗口隐藏时截图没有意义：降频到 10 秒一次，避免后台空转
       if (document.hidden) {
-        pngTimer = setTimeout(tick, 10000)
+        pngTimer = setTimeout(captureLoop, 10000)
         return
       }
-      if (pngRunning) return
-      pngRunning = true
+      if (pngRequesting) return
+
+      pngRequesting = true
       let nextDelay = 1000
-      setPreview((p) => (p === 'error' || p === 'offline' ? 'loading' : p))
+      setPreview((state) =>
+        state === 'error' || state === 'offline' ? 'loading' : state
+      )
+
       try {
         const data = await main.screencapRaw(device.id)
-        if (!alive || !pngAlive) return
+        if (!alive || !pngActive) return
+
         if (data) {
           const next = URL.createObjectURL(
             new Blob([data], { type: 'image/png' })
@@ -89,41 +110,43 @@ export default observer(function DeviceStage() {
         }
         setPreview('idle')
       } catch {
-        if (alive && pngAlive) setPreview('error')
+        if (alive && pngActive) setPreview('error')
         nextDelay = 3000
       } finally {
-        pngRunning = false
-        if (alive && pngAlive) pngTimer = setTimeout(tick, nextDelay)
+        pngRequesting = false
+        if (alive && pngActive) pngTimer = setTimeout(captureLoop, nextDelay)
       }
     }
 
     const startPng = () => {
-      if (!alive) return
-      pngAlive = true
-      if (pngRunning) return
-      pngRunning = true
-      tick()
-    }
-    const stopPng = () => {
-      pngAlive = false
-      clearTimeout(pngTimer)
-      pngRunning = false
+      if (!alive || pngActive) return
+      pngActive = true
+      if (pngRequesting) return
+      pngRequesting = true
+      captureLoop()
     }
 
-    // ---- H264 流：screenrecord -> 主进程 -> WebCodecs 解码 ----
+    const stopPng = () => {
+      pngActive = false
+      clearTimeout(pngTimer)
+      pngRequesting = false
+    }
+
+    // ---------- H264 流 ----------
     let decoder: VideoDecoder | null = null
     let codec = ''
     let sps: Uint8Array | null = null
     let pps: Uint8Array | null = null
     let pending = new Uint8Array(0)
-    let ts = 0
+    let timestamp = 0
     let frames = 0
     let gotFrame = false
     let failed = false
 
-    const fail = () => {
+    function fail() {
       if (!alive || failed) return
       failed = true
+
       try {
         decoder?.close()
       } catch {
@@ -134,9 +157,10 @@ export default observer(function DeviceStage() {
       startPng()
     }
 
-    const onFrame = (frame: VideoFrame) => {
+    function onFrame(frame: VideoFrame) {
       const canvas = canvasRef.current
       if (canvas) {
+        // 尺寸跟着画面走：竖屏/横屏切换时画布要重建
         if (
           canvas.width !== frame.displayWidth ||
           canvas.height !== frame.displayHeight
@@ -148,6 +172,7 @@ export default observer(function DeviceStage() {
         canvas.dataset.frames = String(++frames)
       }
       frame.close()
+
       if (!gotFrame) {
         gotFrame = true
         setStreamReady(true)
@@ -156,18 +181,21 @@ export default observer(function DeviceStage() {
       }
     }
 
-    const configure = () => {
+    function configure() {
       if (!sps || sps.length < 4) return
-      // SPS 的 profile / constraint / level 就是 codec 字符串的三段
+
+      // SPS 的 profile / constraints / level 正好是 codec 字符串的三段
       const next = `avc1.${[1, 2, 3]
         .map((i) => sps![i].toString(16).padStart(2, '0'))
         .join('')
         .toUpperCase()}`
+
       if (decoder && next === codec) return
+
       try {
         decoder?.close()
         decoder = new VideoDecoder({ output: onFrame, error: fail })
-        // 不传 description：H264 按 Annex B 解析，SPS/PPS 随 IDR 一起送进来
+        // 不传 description：按 Annex B 解析，SPS/PPS 随 IDR 一起送进来
         decoder.configure({ codec: next, optimizeForLatency: true })
         codec = next
       } catch {
@@ -175,8 +203,9 @@ export default observer(function DeviceStage() {
       }
     }
 
-    const onNal = (nal: Uint8Array) => {
+    function onNal(nal: Uint8Array) {
       if (!nal.length || failed) return
+
       const type = nal[0] & 0x1f
       if (type === 7) {
         sps = nal.slice()
@@ -187,19 +216,22 @@ export default observer(function DeviceStage() {
         pps = nal.slice()
         return
       }
+      // 只要非 IDR 分片（1）和 IDR（5）
       if (type !== 1 && type !== 5) return
       if (!decoder || !codec) return
+
       const parts: Uint8Array[] = []
       // IDR 前补 SPS/PPS：重新 configure 或丢包后解码器仍能恢复
       if (type === 5 && sps && pps) {
         parts.push(START_CODE, sps, START_CODE, pps)
       }
       parts.push(START_CODE, nal)
+
       try {
         decoder.decode(
           new EncodedVideoChunk({
             type: type === 5 ? 'key' : 'delta',
-            timestamp: (ts += 33333),
+            timestamp: (timestamp += 33333),
             data: concatBytes(parts),
           })
         )
@@ -208,36 +240,40 @@ export default observer(function DeviceStage() {
       }
     }
 
-    const pushChunk = (buf: ArrayBuffer | Uint8Array) => {
+    function pushChunk(buf: ArrayBuffer | Uint8Array) {
       const incoming = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
       const merged = new Uint8Array(pending.length + incoming.length)
       merged.set(pending)
       merged.set(incoming, pending.length)
       pending = merged
 
-      // 找 start code；最后一个 NAL 可能不完整，留到下一次拼
+      // 找 start code（3 或 4 字节）；最后一个 NAL 可能不完整，留到下次拼
       const starts: Array<{ pos: number; len: number }> = []
       for (let i = 0; i + 3 < pending.length; i++) {
-        if (pending[i] === 0 && pending[i + 1] === 0) {
-          if (pending[i + 2] === 1) {
-            starts.push({ pos: i, len: 3 })
-            i += 2
-          } else if (pending[i + 2] === 0 && pending[i + 3] === 1) {
-            starts.push({ pos: i, len: 4 })
-            i += 3
-          }
+        if (pending[i] !== 0 || pending[i + 1] !== 0) continue
+
+        if (pending[i + 2] === 1) {
+          starts.push({ pos: i, len: 3 })
+          i += 2
+        } else if (pending[i + 2] === 0 && pending[i + 3] === 1) {
+          starts.push({ pos: i, len: 4 })
+          i += 3
         }
       }
+
       if (!starts.length) {
-        // 码流异常时别让缓冲区无限增长
+        // 码流异常时别让缓冲无限增长
         if (pending.length > 1024 * 1024) pending = new Uint8Array(0)
         return
       }
-      for (let k = 0; k + 1 < starts.length; k++) {
-        const from = starts[k].pos + starts[k].len
-        const to = starts[k + 1].pos
+
+      for (let i = 0; i + 1 < starts.length; i++) {
+        const from = starts[i].pos + starts[i].len
+        const to = starts[i + 1].pos
         if (to > from) onNal(pending.slice(from, to))
       }
+
+      // 保留最后一个 NAL（可能还没收全）
       pending = pending.slice(starts[starts.length - 1].pos)
     }
 
@@ -254,10 +290,11 @@ export default observer(function DeviceStage() {
     })
 
     main.startPreviewStream(device.id).catch(fail)
-    // 3.5 秒没首帧（老设备不支持 screenrecord / 编码器被占用）就退回截图
+
+    // 3.5 秒没首帧（设备不支持 screenrecord / 编码器被占）就退回截图
     const watchdog = setTimeout(() => {
       if (alive && !gotFrame) fail()
-    }, 3500)
+    }, FIRST_FRAME_TIMEOUT)
 
     return () => {
       alive = false
@@ -265,24 +302,27 @@ export default observer(function DeviceStage() {
       offChunk()
       offError()
       stopPng()
+
       try {
         decoder?.close()
       } catch {
         // ignore
       }
       decoder = null
+
       main.stopPreviewStream().catch(() => undefined)
       if (urlRef.current) {
         URL.revokeObjectURL(urlRef.current)
         urlRef.current = ''
       }
     }
-    // 同一台设备也会从 offline 变成在线：type 一起进依赖，状态变化时重开预览
+    // 同一台设备也会从 offline 变在线：type 一起进依赖
   }, [device?.id, device?.type])
 
-  // 设备弹层要能 Esc 关闭：只能靠点遮罩关，键盘用户没退路
+  // 设备弹层要能 Esc 关：只能点遮罩关的话键盘用户没退路
   useEffect(() => {
     if (!pickerOpen) return
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setPickerOpen(false)
     }
@@ -293,39 +333,52 @@ export default observer(function DeviceStage() {
   useEffect(() => {
     setResolution('')
     if (!device || device.type === 'offline') return
+
     let alive = true
     getOverview(device.id)
       .then((overview) => {
         if (!alive) return
+
         const raw = String(
           overview.physicalResolution || overview.resolution || ''
         )
+        // "1080x1920" → "1920p"：侧栏只要一个短标签
         const matched = /(\d+)x(\d+)/.exec(raw)
         setResolution(matched ? `${matched[2]}p` : raw)
       })
       .catch(() => {
-        // 概览拿不到不影响文件页，侧栏保持 --
+        // 概览拿不到不影响预览，侧栏保持 --
       })
+
     return () => {
       alive = false
     }
   }, [device?.id, device?.type])
 
-  const online = device && device.type !== 'offline'
+  const online = !!device && device.type !== 'offline'
   const latency = ms !== null && ms >= 0 ? `${ms} ms` : '--'
-  const android = device && device.androidVersion
-    ? `Android ${device.androidVersion}`
-    : '--'
+  const android =
+    device && device.androidVersion ? `Android ${device.androidVersion}` : '--'
 
-  const liveText = !device
-    ? t('notConnected')
-    : preview === 'offline'
-      ? t('offline')
-      : preview === 'error'
-        ? t('previewUnavailable')
-        : preview === 'loading' && !url && !streamReady
-          ? t('connectingPreview')
-          : t('livePreview')
+  let liveText = t('livePreview')
+  if (!device) {
+    liveText = t('notConnected')
+  } else if (preview === 'offline') {
+    liveText = t('offline')
+  } else if (preview === 'error') {
+    liveText = t('previewUnavailable')
+  } else if (preview === 'loading' && !url && !streamReady) {
+    liveText = t('connectingPreview')
+  }
+
+  let emptyText = t('fetchingScreen')
+  if (!device) {
+    emptyText = t('deviceNotConnected')
+  } else if (preview === 'offline') {
+    emptyText = t('deviceOffline')
+  } else if (preview === 'error') {
+    emptyText = t('screenUnavailable')
+  }
 
   return (
     <div className={Style.stageWrap}>
@@ -350,15 +403,7 @@ export default observer(function DeviceStage() {
             ) : (
               <div className={Style.screenEmpty}>
                 <span className="icon-phone" />
-                <span>
-                  {!device
-                    ? t('deviceNotConnected')
-                    : preview === 'offline'
-                      ? t('deviceOffline')
-                      : preview === 'error'
-                        ? t('screenUnavailable')
-                        : t('fetchingScreen')}
-                </span>
+                <span>{emptyText}</span>
                 {!device && (
                   <button
                     className={Style.emptyBtn}

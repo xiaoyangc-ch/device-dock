@@ -6,7 +6,8 @@ import Style from './Sidebar.module.scss'
 import DeviceStage from './DeviceStage'
 import SettingsModal from '../toolbar/SettingsModal'
 
-const groups = [
+// 侧栏分组：设备（连接/概览/文件/应用）、系统（进程/性能/硬盘/终端）、采集（截屏/日志）
+const GROUPS = [
   {
     label: 'groupDevice',
     items: [
@@ -36,11 +37,13 @@ const groups = [
 
 export default observer(function Sidebar() {
   const [settingsVisible, setSettingsVisible] = useState(false)
-  const online = store.devices.filter((d) => d.type !== 'offline').length
   const collapsed = store.settings.sidebarCollapsed
+  const online = store.devices.filter((item) => item.type !== 'offline').length
 
   return (
-    <aside className={Style.sidebar + (collapsed ? ' ' + Style.collapsed : '')}>
+    <aside
+      className={Style.sidebar + (collapsed ? ' ' + Style.collapsed : '')}
+    >
       <div className={Style.brand}>
         <span className={Style.mark} />
         <span className={Style.brandText}>
@@ -48,11 +51,11 @@ export default observer(function Sidebar() {
         </span>
       </div>
 
-      {/* 折叠时不渲染设备卡：预览循环会整段停掉，而不是在隐藏的 DOM 里继续抓图 */}
+      {/* 折叠时不渲染设备卡：预览循环会整段停掉，而不是在隐藏 DOM 里继续抓图 */}
       {!collapsed && <DeviceStage />}
 
       <nav className={Style.nav}>
-        {groups.map((group) => (
+        {GROUPS.map((group) => (
           <div key={group.label}>
             <div className={Style.navLabel}>{t(group.label)}</div>
             {group.items.map((item) => (
@@ -87,6 +90,7 @@ export default observer(function Sidebar() {
         ) : (
           <span className={Style.footerText}>{t('deviceNotConnected')}</span>
         )}
+
         <span className={Style.grow} />
         <button
           className={Style.settings}

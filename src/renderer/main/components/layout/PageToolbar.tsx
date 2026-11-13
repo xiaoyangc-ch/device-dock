@@ -1,3 +1,6 @@
+/**
+ * 页面工具栏原语：页面标题栏统一走这里，避免每页各写一套按钮/输入框样式。
+ */
 import { KeyboardEvent, ReactNode } from 'react'
 import Style from './PageToolbar.module.scss'
 
@@ -19,9 +22,7 @@ export function PageBody(props: IPageProps) {
 }
 
 export default function PageToolbar(props: IPageProps) {
-  return (
-    <div className={cx(Style.bar, props.className)}>{props.children}</div>
-  )
+  return <div className={cx(Style.bar, props.className)}>{props.children}</div>
 }
 
 interface IToolButtonProps {
