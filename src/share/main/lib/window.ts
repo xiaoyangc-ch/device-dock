@@ -170,7 +170,10 @@ export function create(opts: IWinOptions) {
     options.webPreferences = {
       preload: path.join(__dirname, '../preload/index.js'),
       webSecurity: false,
-      sandbox: false,
+      // 开 sandbox：preload 只能用 electron 模块，投屏的 socket 桥已搬到
+      // 主进程 lib/stream.ts。webSecurity 暂时保留 false（file:// 下的资源加载
+      // 与设备文件预览还没逐条验证，单独排期）
+      sandbox: true,
     }
   }
 

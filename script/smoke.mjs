@@ -37,7 +37,13 @@ async function waitForApp() {
   while (Date.now() - started < waitApp) {
     try {
       const targets = await listTargets()
-      const page = targets.find((t) => (t.url || '').includes('index.html'))
+      // 多个窗口共用 index.html（投屏是 ?page=webcast）：必须排除带 page= 的，
+      // 否则会连到没有侧栏的投屏窗口，报「页面: []」
+      const page = targets.find(
+        (t) =>
+          (t.url || '').includes('index.html') &&
+          !(t.url || '').includes('page=')
+      )
       if (page) return page
     } catch {
       // 端口还没起来

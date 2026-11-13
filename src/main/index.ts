@@ -9,6 +9,7 @@ import * as recording from './lib/recording'
 import * as preview from './lib/preview'
 import * as latency from './lib/latency'
 import * as reboot from './lib/reboot'
+import * as stream from './lib/stream'
 import * as terminal from 'share/main/window/terminal'
 import * as window from 'share/main/lib/window'
 import log from 'share/common/log'
@@ -35,6 +36,7 @@ app.on('ready', () => {
   preview.init()
   latency.init()
   reboot.init()
+  stream.init()
   main.showWin()
   menu.init()
 })

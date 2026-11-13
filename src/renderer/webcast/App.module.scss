@@ -17,8 +17,11 @@
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
-  background: #f7f7f7;
-  border-bottom: 1px solid #d9d9d9;
+  /* 必须跟主题走：投屏窗口的 body 带 -theme-with-dark-background，
+     图标是 currentColor（深色下白色），硬编码浅灰底会变成白底白字 */
+  background: var(--color-bg-container, #f7f7f7);
+  border-bottom: 1px solid var(--color-border, #d9d9d9);
+  color: var(--color-text, #1b1f27);
 }
 
 /* 窗口拖窄时按钮保持原尺寸，宁可横向滚动也不挤压 */
@@ -125,8 +128,8 @@
   width: 320px;
   padding: 16px;
   border-radius: 8px;
-  background: #f7f7f7;
-  color: #333;
+  background: var(--color-bg-container, #f7f7f7);
+  color: var(--color-text, #333);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
 }
 
@@ -155,10 +158,10 @@
   width: 150px;
   height: 26px;
   font-size: 12px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--color-border, #d9d9d9);
   border-radius: 6px;
-  background: #fff;
-  color: #333;
+  background: var(--color-bg-container-lighter, #fff);
+  color: var(--color-text, #333);
 }
 
 /* 与下拉框右对齐、单独一行：塞进 label 的 flex 行会把「编码」挤成两行并溢出弹窗 */
@@ -183,10 +186,10 @@
   padding: 0 14px;
   font-size: 12px;
   cursor: pointer;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--color-border, #d9d9d9);
   border-radius: 6px;
-  background: #fff;
-  color: #555;
+  background: var(--color-bg-container-lighter, #fff);
+  color: var(--color-text-secondary, #555);
 }
 
 .castDialogActions .castReboot {
@@ -208,10 +211,10 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--color-border, #d9d9d9);
   border-radius: 6px;
-  background: #fff;
-  color: #333;
+  background: var(--color-bg-container-lighter, #fff);
+  color: var(--color-text, #333);
 }
 
 .castDisplayOption:hover:not(:disabled) {

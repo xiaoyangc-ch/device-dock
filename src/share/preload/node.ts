@@ -1,47 +1,54 @@
 /**
- * 投屏数据通道：渲染层通过本地 TCP 连主进程里的 adb forward 端口。
- * 用序号管理 socket，关闭/出错都要回收，否则长时间投屏会泄漏句柄。
+ * 投屏数据通道（preload 侧）。
+ *
+ * 开启 sandbox 后 preload 不能用 Node API，socket 实际由主进程建立
+ * （`main/lib/stream.ts`），本文件只通过 IPC 转发数据与事件。
+ * 对外接口保持不变：connectStream / writeStream / closeStream。
  */
-import net from 'node:net'
+import { ipcRenderer } from 'electron'
 
-const sockets = new Map<number, net.Socket>()
-let socketSeq = 0
+type StreamHandlers = {
+  onConnect: () => void
+  onData: (data: Uint8Array) => void
+  onClose: () => void
+  onError: (message: string) => void
+}
+
+const handlers = new Map<number, StreamHandlers>()
+
+ipcRenderer.on(
+  'streamEvent',
+  (_event, id: number, type: string, payload?: unknown) => {
+    const h = handlers.get(id)
+    if (!h) return
+    if (type === 'connect') {
+      h.onConnect()
+    } else if (type === 'data') {
+      h.onData(new Uint8Array(payload as ArrayBuffer))
+    } else if (type === 'close') {
+      handlers.delete(id)
+      h.onClose()
+    } else if (type === 'error') {
+      handlers.delete(id)
+      h.onError(String(payload))
+    }
+  }
+)
 
 export default {
-  connectStream(
-    port: number,
-    handlers: {
-      onConnect: () => void
-      onData: (data: Uint8Array) => void
-      onClose: () => void
-      onError: (message: string) => void
-    }
-  ): number {
-    const id = ++socketSeq
-    const socket = net.connect(port, '127.0.0.1')
-    sockets.set(id, socket)
-
-    socket.on('connect', () => handlers.onConnect())
-    socket.on('data', (data: Buffer) => handlers.onData(new Uint8Array(data)))
-    socket.on('close', () => {
-      sockets.delete(id)
-      handlers.onClose()
-    })
-    socket.on('error', (err: Error) => {
-      sockets.delete(id)
-      handlers.onError(err?.message ? err.message : String(err))
-    })
-
+  connectStream(port: number, h: StreamHandlers): number {
+    // 同步拿 id：上层是按「调用即得 id」写的
+    const id = ipcRenderer.sendSync('streamConnect', port) as number
+    handlers.set(id, h)
     return id
   },
 
   writeStream(id: number, data: Uint8Array) {
-    sockets.get(id)?.write(data)
+    ipcRenderer.send('streamWrite', id, data)
   },
 
   closeStream(id: number) {
-    const socket = sockets.get(id)
-    sockets.delete(id)
-    socket?.destroy()
+    handlers.delete(id)
+    ipcRenderer.send('streamClose', id)
   },
 }
