@@ -36,6 +36,11 @@ import os from 'os'
 import { getSettingsStore } from '../../../main/lib/store'
 
 const logger = log('ipc')
+
+// 渲染层 → 其它窗口的事件白名单（主进程内部的 sendTo 不走这条 IPC）
+const SEND_TO_WINDOW_ALLOW: Record<string, Set<string>> = {
+  main: new Set(['refreshDevices']),
+}
 const settingsStore = getSettingsStore()
 const memStore = getMemStore()
 
@@ -132,6 +137,15 @@ export function init() {
   handleEvent(
     'sendToWindow',
     <IpcSendToWindow>((name, channel, ...args) => {
+      // 泛化通道等于让任意渲染层驱动任意窗口的任意逻辑：
+      // 目前只有设备连接页需要让主窗口刷新列表，就只放行这一条。
+      // 主进程自己用的 sendTo 不经过这里，不受影响。
+      if (!(name in SEND_TO_WINDOW_ALLOW)) {
+        throw new Error(`不允许向窗口 ${name} 发事件`)
+      }
+      if (!SEND_TO_WINDOW_ALLOW[name].has(channel)) {
+        throw new Error(`窗口 ${name} 不允许事件 ${channel}`)
+      }
       window.sendTo(name, channel, ...args)
     })
   )
