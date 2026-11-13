@@ -1,3 +1,11 @@
+/**
+ * 窗口统一创建与管理。
+ *
+ * - 位置、最大化状态按窗口名存 data/window.json，重开时还原；
+ * - 还原位置时按当前最小尺寸兜底：3.0 的侧栏更宽，旧版本存的 960×640
+ *   直接沿用会把内容区压死；
+ * - ready-to-show 在某些情况下不会触发（页签隐藏、加载失败），1 秒后强制显示。
+ */
 import {
   BrowserWindow,
   BrowserWindowConstructorOptions,
@@ -5,7 +13,6 @@ import {
 } from 'electron'
 import types from 'licia/types'
 import defaults from 'licia/defaults'
-import each from 'licia/each'
 import path from 'path'
 import { attachTitlebarToWindow } from 'custom-electron-titlebar/main'
 import { colorBgContainer, colorBgContainerDark } from 'common/theme'
@@ -23,7 +30,6 @@ import isUndef from 'licia/isUndef'
 import extend from 'licia/extend'
 
 const logger = log('window')
-
 const store = getWindowStore()
 
 interface IWinOptions {
@@ -62,40 +68,81 @@ const defaultOptions: Partial<IWinOptions> = {
   resizable: true,
 }
 
+function restoreBounds(opts: IWinOptions) {
+  const data = store.get(opts.name) || {}
+
+  if (data.bounds) {
+    if (!opts.resizable) {
+      delete data.bounds.width
+      delete data.bounds.height
+    }
+    extend(opts, data.bounds)
+    if (opts.minWidth && opts.width && opts.width < opts.minWidth) {
+      opts.width = opts.minWidth
+    }
+    if (opts.minHeight && opts.height && opts.height < opts.minHeight) {
+      opts.height = opts.minHeight
+    }
+  }
+
+  if (data.maximized) {
+    opts.maximized = data.maximized
+  }
+}
+
+function defaultSavePos(opts: IWinOptions, win: BrowserWindow) {
+  const data = store.get(opts.name) || {}
+  const maximized = win.isMaximized()
+
+  // Windows 最大化时的 bounds 是铺满屏幕的尺寸：存了会让下次「还原」也变成全屏
+  if (!isWindows || !maximized) {
+    data.bounds = win.getBounds()
+  }
+  if (isWindows) {
+    data.maximized = maximized
+  }
+  store.set(opts.name, data)
+}
+
+function applyBounds(
+  options: BrowserWindowConstructorOptions,
+  opts: Required<IWinOptions>
+) {
+  if (isUndef(opts.x) || isUndef(opts.y)) {
+    options.width = opts.width
+    options.height = opts.height
+    return
+  }
+
+  // 上次的位置可能在已拔掉的外接屏上：完全落在某块屏幕工作区内才沿用
+  const area = screen.getDisplayMatching({
+    x: opts.x,
+    y: opts.y,
+    width: opts.width,
+    height: opts.height,
+  }).workArea
+
+  if (
+    opts.x >= area.x &&
+    opts.x + opts.width <= area.x + area.width &&
+    opts.y >= area.y &&
+    opts.y + opts.height <= area.y + area.height
+  ) {
+    options.x = opts.x
+    options.y = opts.y
+  }
+  if (opts.width <= area.width && opts.height <= area.height) {
+    options.width = opts.width
+    options.height = opts.height
+  }
+}
+
 export function create(opts: IWinOptions) {
   defaults(opts, defaultOptions)
 
   if (isUndef(opts.onSavePos)) {
-    opts.onSavePos = function () {
-      const isMaximized = win.isMaximized()
-      const data = store.get(opts.name) || {}
-      if (!isWindows || !isMaximized) {
-        data.bounds = win.getBounds()
-      }
-      if (isWindows) {
-        data.maximized = isMaximized
-      }
-      store.set(opts.name, data)
-    }
-    const data = store.get(opts.name) || {}
-    if (data.bounds) {
-      if (!opts.resizable) {
-        delete data.bounds.width
-        delete data.bounds.height
-      }
-      extend(opts, data.bounds)
-      // 3.0 主窗口侧栏更宽：旧版本存的 960×640 直接沿用会把内容区压死，
-      // 恢复位置时按当前窗口的最小尺寸兜底。
-      if (opts.minWidth && opts.width && opts.width < opts.minWidth) {
-        opts.width = opts.minWidth
-      }
-      if (opts.minHeight && opts.height && opts.height < opts.minHeight) {
-        opts.height = opts.minHeight
-      }
-    }
-    if (data.maximized) {
-      opts.maximized = data.maximized
-    }
+    opts.onSavePos = () => defaultSavePos(opts, win)
+    restoreBounds(opts)
   }
 
   const winOptions = opts as Required<IWinOptions>
@@ -111,36 +158,10 @@ export function create(opts: IWinOptions) {
     options.maximizable = false
     options.minimizable = false
   }
-  if (!isUndef(winOptions.x) && !isUndef(winOptions.y)) {
-    const x = winOptions.x
-    const y = winOptions.y
-    const width = winOptions.width
-    const height = winOptions.height
-    const area = screen.getDisplayMatching({
-      x,
-      y,
-      width,
-      height,
-    }).workArea
-    if (
-      x >= area.x &&
-      x + width <= area.x + area.width &&
-      y >= area.y &&
-      y + height <= area.y + area.height
-    ) {
-      options.x = winOptions.x
-      options.y = winOptions.y
-    }
-    if (width <= area.width && height <= area.height) {
-      options.width = winOptions.width
-      options.height = winOptions.height
-    }
-  } else {
-    options.width = winOptions.width
-    options.height = winOptions.height
-  }
+  applyBounds(options, winOptions)
 
-  // getTheme() 返回 'dark' | 'light'，是字符串：不能直接当布尔用，否则浅色主题也拿深色底
+  // getTheme() 返回 'dark' | 'light' 字符串：不能当布尔用，
+  // 否则浅色主题也会拿到深色底色
   options.backgroundColor =
     getTheme() === 'light' ? colorBgContainer : colorBgContainerDark
 
@@ -154,7 +175,7 @@ export function create(opts: IWinOptions) {
 
   if (winOptions.titlebar) {
     if (winOptions.nativeTitlebarOverlay && isMac) {
-      // macOS：内容延伸到窗口顶部，红绿灯由系统绘制，侧栏品牌区留出位置
+      // macOS：内容延伸到顶部，红绿灯由系统绘制，侧栏品牌区自己留位置
       options.titleBarStyle = 'hiddenInset'
       options.trafficLightPosition = { x: 18, y: 18 }
     } else if (winOptions.customTitlebar) {
@@ -167,64 +188,50 @@ export function create(opts: IWinOptions) {
 
   logger.debug('create', opts.name, options)
   const win = new BrowserWindow(options)
-  const useOverlay = !!(
-    winOptions.titlebar &&
-    winOptions.nativeTitlebarOverlay &&
-    isMac
-  )
+
+  const useOverlay = !!(winOptions.titlebar && winOptions.nativeTitlebarOverlay && isMac)
   ;(win as any).nativeTitlebarOverlay = useOverlay
   ;(win as any).customTitlebar =
     winOptions.titlebar && winOptions.customTitlebar && !useOverlay
+
   if (!winOptions.menu) {
     win.setMenu(null)
   }
 
+  // 拖动/缩放每秒触发几十次：1 秒节流落盘
   const onSavePos = debounce(() => {
-    if (win.isDestroyed()) {
-      return
-    }
-    if (!win.isFullScreen()) {
+    if (!win.isDestroyed() && !win.isFullScreen()) {
       winOptions.onSavePos()
     }
   }, 1000)
 
   const readyAndShow = once(() => {
     logger.info(opts.name, 'ready and show')
-    if (win.isDestroyed()) {
-      return
-    }
-    if (winOptions.maximized && isWindows) {
-      win.maximize()
-    }
+    if (win.isDestroyed()) return
+
+    if (winOptions.maximized && isWindows) win.maximize()
     win.show()
     win.on('resize', onSavePos)
     win.on('moved', onSavePos)
   })
+
   win.once('ready-to-show', () => {
     logger.info(opts.name, 'on ready-to-show')
     readyAndShow()
   })
-  // Make sure the window is shown even if the ready-to-show event is not emitted
+  // 兜底：没收到 ready-to-show 也要显示，否则像启动失败
   const showTimer = setTimeout(() => readyAndShow(), 1000)
-  win.on('closed', () => {
-    clearTimeout(showTimer)
-  })
+  win.on('closed', () => clearTimeout(showTimer))
 
-  win.on('show', () => {
-    win.webContents.send('showWin')
-  })
+  win.on('show', () => win.webContents.send('showWin'))
   win.on('focus', () => {
     focusedWin = win
     win.webContents.send('focusWin')
   })
   win.on('closed', () => {
-    // 同名单窗口可能已经重建：只删除自己，别把新窗口的登记抹掉
-    if (wins[opts.name] === win) {
-      delete wins[opts.name]
-    }
-    if (focusedWin === win) {
-      focusedWin = null
-    }
+    // 同名单窗口可能已经重建：只删自己，别把新窗口的登记抹掉
+    if (wins[opts.name] === win) delete wins[opts.name]
+    if (focusedWin === win) focusedWin = null
   })
   wins[opts.name] = win
 
@@ -241,12 +248,13 @@ export function setDefaultOptions(opts: Partial<IWinOptions>) {
 }
 
 export function sendAll(channel: string, ...args: any[]) {
-  each(wins, (win) => {
-    // 任何一个窗口正在销毁都不能中断整轮广播（否则其它窗口收不到 theme 等事件）
-    if (!win.isDestroyed()) {
+  for (const name of Object.keys(wins)) {
+    const win = wins[name]
+    // 任何一个窗口正在销毁都不能中断整轮广播（否则其它窗口收不到 theme）
+    if (win && !win.isDestroyed()) {
       win.webContents.send(channel, ...args)
     }
-  })
+  }
 }
 
 export function sendFocused(channel: string, ...args: any[]) {
@@ -265,9 +273,7 @@ export function sendTo(name: string, channel: string, ...args: any[]) {
 export function loadPage(win: BrowserWindow, q: types.PlainObj<string> = {}) {
   if (isDev()) {
     let url = 'http://localhost:8080/'
-    if (!isEmpty(q)) {
-      url += `?${query.stringify(q)}`
-    }
+    if (!isEmpty(q)) url += `?${query.stringify(q)}`
     win.loadURL(url)
   } else {
     win.loadFile(path.resolve(__dirname, '../renderer/index.html'), {
@@ -283,4 +289,3 @@ export function getWin(name: string) {
 export function getFocusedWin() {
   return focusedWin
 }
-

@@ -6,6 +6,7 @@ let win: BrowserWindow | null = null
 export function showWin(url: string) {
   if (win) {
     win.focus()
+    // 窗口复用：把新地址推给已打开的播放器，不重建窗口
     window.sendTo('video', 'setVideoUrl', url)
     return
   }
@@ -23,8 +24,5 @@ export function showWin(url: string) {
     win = null
   })
 
-  window.loadPage(win, {
-    page: 'video',
-    videoUrl: url,
-  })
+  window.loadPage(win, { page: 'video', videoUrl: url })
 }

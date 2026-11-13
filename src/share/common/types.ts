@@ -1,3 +1,7 @@
+/**
+ * 主进程 ↔ 渲染层的 IPC 类型。通道名在 preload/main.ts，
+ * 这里只描述参数和返回值，改接口时两边一起改。
+ */
 import {
   OpenDialogOptions,
   OpenDialogReturnValue,
@@ -13,7 +17,7 @@ export interface IModalProps {
 export type IpcGetLanguage = () => string
 export type IpcGetTheme = () => string
 export type IpcGetStore = (name: string) => any
-export type IpcSetStore = (name: string, val: any) => void
+export type IpcSetStore = (name: string, value: any) => void
 export type IpcShowContextMenu = (x: number, y: number, template: any) => void
 export type IpcShowOpenDialog = (
   options: OpenDialogOptions
@@ -29,7 +33,6 @@ export type IpcSendToWindow = (
 export type IpcOpenExternal = (url: string) => void
 export type IpcReadClipboard = () => Promise<string>
 export type IpcWriteClipboard = (text: string) => Promise<void>
-
 export type IpcOpenPath = (path: string) => void
 export type IpcShowItemInFolder = IpcOpenPath
 export type IpcOpenWindow = (

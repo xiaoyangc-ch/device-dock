@@ -23,7 +23,5 @@ export function showWin() {
     win = null
   })
 
-  window.loadPage(win, {
-    page: 'about',
-  })
+  window.loadPage(win, { page: 'about' })
 }

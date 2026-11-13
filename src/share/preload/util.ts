@@ -1,7 +1,11 @@
 /* eslint-disable */
+/**
+ * ipcRenderer.invoke 的类型化包装：把主进程侧的 (args) => Return 映射成
+ * 渲染侧 (args) => Promise<Return>，同步签名自动包成 Promise。
+ */
 import { ipcRenderer } from 'electron'
 
-export function invoke<T extends Function>(channel) {
+export function invoke<T extends Function>(channel: string) {
   return function (...args: any[]) {
     return ipcRenderer.invoke(channel, ...args)
   } as Promisify<T>

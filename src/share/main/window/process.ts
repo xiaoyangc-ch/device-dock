@@ -1,3 +1,7 @@
+/**
+ * 应用进程面板窗口：列出 Electron 自身进程（主/渲染/GPU/工具进程）的 CPU 和内存，
+ * 支持查看 devtools 和结束进程。设备上的进程管理在 src/main/lib/adb 里，与这里无关。
+ */
 import { BrowserWindow, app, webContents, WebContents } from 'electron'
 import type { ProcessMetric } from 'electron'
 import * as window from '../../main/lib/window'
@@ -15,7 +19,6 @@ import { t } from '../../common/i18n'
 import { isDev } from '../../common/util'
 import isEmpty from 'licia/isEmpty'
 import singleton from 'licia/singleton'
-import each from 'licia/each'
 import os from 'os'
 
 let win: BrowserWindow | null = null
@@ -36,55 +39,52 @@ export function showWin() {
     minHeight: 480,
   })
 
-  const w = win
-  w.on('close', () => {
+  const created = win
+  created.on('close', () => {
     // 先置空再 destroy：destroy 会同步再触发一次 close，第二次进来 win 已是 null
-    if (win === w) win = null
-    if (!w.isDestroyed()) w.destroy()
+    if (win === created) win = null
+    if (!created.isDestroyed()) created.destroy()
   })
 
-  window.loadPage(w, { page: 'process' })
+  window.loadPage(created, { page: 'process' })
 }
 
 let debugWin: BrowserWindow | null = null
 
 export async function debugMainProcess() {
-  if (!isDev()) {
-    return
-  }
-
+  if (!isDev()) return
   if (debugWin) {
     debugWin.focus()
     return
   }
 
-  const json = await fetch('http://127.0.0.1:9229/json/list').then((res) =>
+  const targets = await fetch('http://127.0.0.1:9229/json/list').then((res) =>
     res.json()
   )
+  if (isEmpty(targets)) return
 
-  if (!isEmpty(json)) {
-    const url = json[0].devtoolsFrontendUrl
-    debugWin = window.create({
-      name: 'devtools',
-      preload: false,
-      customTitlebar: false,
-      menu: false,
-    })
-
-    debugWin.loadURL(url)
-
-    debugWin.on('close', () => {
-      debugWin?.destroy()
-      debugWin = null
-    })
-  }
+  debugWin = window.create({
+    name: 'devtools',
+    preload: false,
+    customTitlebar: false,
+    menu: false,
+  })
+  debugWin.loadURL(targets[0].devtoolsFrontendUrl)
+  debugWin.on('close', () => {
+    debugWin?.destroy()
+    debugWin = null
+  })
 }
 
 const cpuNum = os.cpus().length
 
-// Electron contextIsolation preload world (see webContents.executeJavaScriptInIsolatedWorld)
+// preload 隔离世界的 id：用它才能在渲染进程里拿到那块 world 的 process 对象
 const PRELOAD_WORLD_ID = 999
 
+/**
+ * Electron 的 workingSetSize 含共享页，几个渲染进程加总常大于物理内存。
+ * 主进程和渲染进程都能拿到更准的 private，拿不到再退回 workingSetSize。
+ */
 async function getMemoryFootprint(
   metric: ProcessMetric,
   wc?: WebContents
@@ -93,8 +93,7 @@ async function getMemoryFootprint(
 
   if (metric.pid === process.pid) {
     try {
-      const info = await process.getProcessMemoryInfo()
-      return info.private
+      return (await process.getProcessMemoryInfo()).private
     } catch {
       return fallback
     }
@@ -102,9 +101,10 @@ async function getMemoryFootprint(
 
   if (wc && !wc.isDestroyed()) {
     try {
-      const info = await wc.executeJavaScriptInIsolatedWorld(PRELOAD_WORLD_ID, [
-        { code: 'process.getProcessMemoryInfo()' },
-      ])
+      const info = await wc.executeJavaScriptInIsolatedWorld(
+        PRELOAD_WORLD_ID,
+        [{ code: 'process.getProcessMemoryInfo()' }]
+      )
       return info.private
     } catch {
       return fallback
@@ -115,70 +115,63 @@ async function getMemoryFootprint(
 }
 
 const getProcessData: IpcGetProcessData = singleton(async () => {
-  const allWebContents = Object.fromEntries(
-    map(webContents.getAllWebContents(), (webContent) => [
-      webContent.getOSProcessId(),
-      webContent,
-    ])
+  const wcByPid = Object.fromEntries(
+    map(webContents.getAllWebContents(), (wc) => [wc.getOSProcessId(), wc])
   )
 
-  const processData = await Promise.all(
+  return Promise.all(
     map(app.getAppMetrics(), async (metric) => {
-      const webContent = allWebContents[metric.pid]
-      const ret: IProcess = {
+      const wc = wcByPid[metric.pid]
+      const item: IProcess = {
         name: metric.name || metric.serviceName || '',
         pid: metric.pid,
+        // Electron 报的是单核占比，乘核数才是活动监视器那种 100% 口径
         cpu: metric.cpu.percentCPUUsage * cpuNum,
-        memory: await getMemoryFootprint(metric, webContent),
+        memory: await getMemoryFootprint(metric, wc),
         type: metric.type,
       }
 
-      if (webContent) {
-        ret.name = webContent.getTitle() || ret.name
-        ret.webContentsId = webContent.id
+      if (wc) {
+        item.name = wc.getTitle() || item.name
+        item.webContentsId = wc.id
       }
-      if (metric.pid === process.pid) {
-        ret.name = t('mainProcess')
-      }
-
-      return ret
+      if (metric.pid === process.pid) item.name = t('mainProcess')
+      return item
     })
   )
-
-  return processData
 })
 
 export const getCpuAndMem: IpcGetCpuAndMem = async () => {
-  const processData = await getProcessData()
+  const data = await getProcessData()
   let cpu = 0
   let memory = 0
-  each(processData, (p) => {
-    cpu += p.cpu
-    memory += p.memory
-  })
-  return {
-    cpu: cpu / cpuNum,
-    memory,
+  for (const item of data) {
+    cpu += item.cpu
+    memory += item.memory
   }
+  return { cpu: cpu / cpuNum, memory }
 }
 
 const initIpc = once(() => {
   handleEvent('getProcessData', getProcessData)
-  handleEvent('killProcess', <IpcKillProcess>(async (pid) => {
-    if (!Number.isInteger(pid) || pid <= 0) {
-      throw new Error('invalid pid')
-    }
-    const data = await getProcessData()
-    if (!data.some((item) => item.pid === pid)) {
-      throw new Error('pid not found')
-    }
-    process.kill(pid, 'SIGTERM')
-  }))
-  handleEvent('openDevtools', <IpcOpenDevtools>((webContentsId) => {
-    const wc = webContents.fromId(webContentsId)
-    if (wc) {
-      wc.openDevTools({ mode: 'detach' })
-    }
-  }))
+  handleEvent(
+    'killProcess',
+    <IpcKillProcess>(async (pid) => {
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error('invalid pid')
+
+      // 只允许结束 Electron 自己的进程：直接 process.kill 会误杀系统进程
+      const data = await getProcessData()
+      if (!data.some((item) => item.pid === pid)) {
+        throw new Error('pid not found')
+      }
+      process.kill(pid, 'SIGTERM')
+    })
+  )
+  handleEvent(
+    'openDevtools',
+    <IpcOpenDevtools>((webContentsId) => {
+      webContents.fromId(webContentsId)?.openDevTools({ mode: 'detach' })
+    })
+  )
   handleEvent('debugMainProcess', debugMainProcess)
 })

@@ -1,3 +1,7 @@
+/**
+ * 渲染层可见的 window.main：每个方法对应主进程的一个 IPC 通道。
+ * 通道名必须与主进程 handleEvent/ipcMain.handle 一字不差。
+ */
 import { invoke } from './util'
 import types from 'licia/types'
 import { ipcRenderer } from 'electron'
@@ -50,11 +54,6 @@ export default {
   isCustomTitlebar: invoke<IpcIsCustomTitlebar>('isCustomTitlebar'),
   isTitlebarOverlay: invoke<IpcIsTitlebarOverlay>('isTitlebarOverlay'),
   getOpenFile: invoke<IpcGetOpenFile>('getOpenFile'),
-  on: (event: string, cb: types.AnyFn) => {
-    const listener = (e, ...args) => cb(...args)
-    ipcRenderer.on(event, listener)
-    return () => ipcRenderer.off(event, listener)
-  },
   showTerminal: invoke('showTerminal'),
   resolveResources: invoke<IpcResolveResources>('resolveResources'),
   getProcessData: invoke<IpcGetProcessData>('getProcessData'),
@@ -69,4 +68,10 @@ export default {
   toggleWinMaximize: invoke('toggleWinMaximize'),
   hideWin: invoke('hideWin'),
   getPath: invoke<IpcGetPath>('getPath'),
+  // 事件订阅返回解除函数：React effect 里直接 return 即可
+  on: (event: string, cb: types.AnyFn) => {
+    const listener = (_e: any, ...args: any[]) => cb(...args)
+    ipcRenderer.on(event, listener)
+    return () => ipcRenderer.off(event, listener)
+  },
 }

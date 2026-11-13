@@ -1,5 +1,7 @@
+/**
+ * 主进程公共工具：资源路径、userData 路径、主题、IPC 注册。
+ */
 import path from 'path'
-import contain from 'licia/contain'
 import types from 'licia/types'
 import { app, ipcMain, nativeTheme } from 'electron'
 import { isDev } from '../../common/util'
@@ -12,25 +14,24 @@ import { createHash } from 'crypto'
 
 const execAsync = promisify(_exec)
 
-export function resolve(p) {
-  if (isDev()) {
-    return path.resolve(__dirname, '../../', p)
-  } else {
-    return path.resolve(__dirname, '../', p)
-  }
+/** dev 下 __dirname 在 dist/share/main，生产在 app.asar 内：基路径不同 */
+export function resolve(p: string) {
+  return isDev()
+    ? path.resolve(__dirname, '../../', p)
+    : path.resolve(__dirname, '../', p)
 }
 
-export function resolveResources(p) {
+export function resolveResources(p: string) {
   const ret = resolve(`resources/${p}`)
-
-  if (!isDev() && contain(ret, 'app.asar')) {
+  // 打包后 resources 在 asar 外面（electron-builder 的 extraResources）
+  if (!isDev() && ret.includes('app.asar')) {
     return path.resolve(process.resourcesPath, p)
   }
-
   return ret
 }
 
 if (isDev()) {
+  // 开发版和正式版共用 productName 下的 userData，配置/窗口位置保持一致
   app.setPath('userData', path.resolve(app.getPath('appData'), pkg.productName))
 }
 
@@ -42,7 +43,6 @@ export function getTheme() {
   if (nativeTheme.themeSource === 'system') {
     return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   }
-
   return nativeTheme.themeSource
 }
 
@@ -55,13 +55,9 @@ export function handleEvent(channel: string, listener: types.AnyFn) {
 }
 
 export function getOpenFileFromArgv(argv: string[], ext: string) {
-  for (let i = 0, len = argv.length; i < len; i++) {
-    const arg = argv[i]
-    if (endWith(arg, ext)) {
-      return arg
-    }
+  for (const arg of argv) {
+    if (endWith(arg, ext)) return arg
   }
-
   return ''
 }
 
