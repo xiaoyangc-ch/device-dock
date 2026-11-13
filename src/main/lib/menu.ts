@@ -1,37 +1,31 @@
+/**
+ * 应用菜单：macOS 的 app 菜单（关于/隐藏/退出）、编辑、工具、帮助。
+ * Windows 也保留「编辑」菜单：没有 copy/paste role 时，
+ * 输入框里的 Ctrl+C/V 在部分打包/远程桌面环境下不生效。
+ */
 import { Menu, MenuItemConstructorOptions, app, shell } from 'electron'
 import * as window from 'share/main/lib/window'
 import * as terminal from 'share/main/window/terminal'
 import * as process from 'share/main/window/process'
 import * as about from 'share/main/window/about'
 import isMac from 'licia/isMac'
-import { t } from 'common/util'
-import upperCase from 'licia/upperCase'
 import isWindows from 'licia/isWindows'
+import upperCase from 'licia/upperCase'
+import { t } from 'common/util'
 import { getUserDataPath } from 'share/main/lib/util'
 import { isDev } from 'share/common/util'
 
-function getTemplate(): MenuItemConstructorOptions[] {
-  const hideMenu: MenuItemConstructorOptions[] = isMac
+function appMenu(): MenuItemConstructorOptions {
+  const macItems: MenuItemConstructorOptions[] = isMac
     ? [
-        {
-          type: 'separator',
-        },
-        {
-          label: t('hideApp'),
-          role: 'hide',
-        },
-        {
-          label: t('hideOthers'),
-          role: 'hideOthers',
-        },
-        {
-          label: t('showAll'),
-          role: 'unhide',
-        },
+        { type: 'separator' },
+        { label: t('hideApp'), role: 'hide' },
+        { label: t('hideOthers'), role: 'hideOthers' },
+        { label: t('showAll'), role: 'unhide' },
       ]
     : []
 
-  const appMenu: MenuItemConstructorOptions = {
+  return {
     label: upperCase(app.name),
     submenu: [
       {
@@ -40,10 +34,8 @@ function getTemplate(): MenuItemConstructorOptions[] {
           about.showWin()
         },
       },
-      ...hideMenu,
-      {
-        type: 'separator',
-      },
+      ...macItems,
+      { type: 'separator' },
       {
         label: t('quitApp'),
         accelerator: isMac ? 'Command+Q' : 'Ctrl+Q',
@@ -53,34 +45,23 @@ function getTemplate(): MenuItemConstructorOptions[] {
       },
     ],
   }
+}
 
-  const edit: MenuItemConstructorOptions = {
+function editMenu(): MenuItemConstructorOptions {
+  return {
     label: t('edit'),
     submenu: [
-      {
-        role: 'cut',
-        label: t('cut'),
-      },
-      {
-        role: 'copy',
-        label: t('copy'),
-      },
-      {
-        role: 'paste',
-        label: t('paste'),
-      },
-      {
-        role: 'delete',
-        label: t('delete'),
-      },
-      {
-        role: 'selectAll',
-        label: t('selectAll'),
-      },
+      { role: 'cut', label: t('cut') },
+      { role: 'copy', label: t('copy') },
+      { role: 'paste', label: t('paste') },
+      { role: 'delete', label: t('delete') },
+      { role: 'selectAll', label: t('selectAll') },
     ],
   }
+}
 
-  const tools: MenuItemConstructorOptions = {
+function toolsMenu(): MenuItemConstructorOptions {
+  return {
     label: t('tools'),
     submenu: [
       {
@@ -97,51 +78,45 @@ function getTemplate(): MenuItemConstructorOptions[] {
       },
     ],
   }
+}
 
-  const help: MenuItemConstructorOptions = {
+function helpMenu(): MenuItemConstructorOptions {
+  const devItems: MenuItemConstructorOptions[] = isDev()
+    ? [
+        {
+          label: t('openUserDataDir'),
+          click() {
+            shell.openPath(getUserDataPath(''))
+          },
+        },
+        {
+          label: t('debugMainProcess'),
+          click() {
+            process.debugMainProcess()
+          },
+        },
+        { type: 'separator' },
+      ]
+    : []
+
+  return {
     role: 'help',
     label: t('help'),
     submenu: [
-      ...(isDev()
-        ? [
-            {
-              label: t('openUserDataDir'),
-              click() {
-                shell.openPath(getUserDataPath(''))
-              },
-            },
-            {
-              label: t('debugMainProcess'),
-              click() {
-                process.debugMainProcess()
-              },
-            },
-            {
-              type: 'separator' as const,
-            },
-          ]
-        : []),
-      {
-        role: 'toggleDevTools',
-        label: t('toggleDevtools'),
-      },
+      ...devItems,
+      { role: 'toggleDevTools', label: t('toggleDevtools') },
     ],
   }
+}
 
-  const template: MenuItemConstructorOptions[] = [tools, help]
-  // Windows 也要有「编辑」菜单：没有 copy/paste 的 role，Ctrl+C/V 在输入框里
-  // 有时不生效（尤其远程桌面/精简菜单的打包），用户连粘贴都没入口
-  template.unshift(appMenu, edit)
-
-  return template
+function buildTemplate(): MenuItemConstructorOptions[] {
+  return [appMenu(), editMenu(), toolsMenu(), helpMenu()]
 }
 
 function updateMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(getTemplate()))
-
-  if (isWindows) {
-    window.sendTo('main', 'refreshMenu')
-  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate()))
+  // Windows 用的是自绘标题栏：菜单变了要通知渲染层重画
+  if (isWindows) window.sendTo('main', 'refreshMenu')
 }
 
 export function init() {

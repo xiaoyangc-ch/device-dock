@@ -1,3 +1,7 @@
+/**
+ * 主进程配置存储：main（界面状态）、screencast（投屏设置）、settings（全局设置）。
+ * 都落在 userData/data/*.json，读写走 licia FileStore（同步、原子写）。
+ */
 import memoize from 'licia/memoize'
 import FileStore from 'licia/FileStore'
 import { getUserDataPath } from 'share/main/lib/util'
