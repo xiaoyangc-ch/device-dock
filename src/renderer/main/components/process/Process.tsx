@@ -72,6 +72,12 @@ export default observer(function Process() {
     [device?.id, device?.type]
   )
 
+  // 每 5 秒轮询一次：同一进程名/包名不变时复用上一轮的 DOM 节点，
+  // 否则 260 行 × 6 列每轮全部重建（老设备上能明显看到卡顿）
+  const rowCache = useRef(
+    new Map<string, { packageName: string; nameEl: HTMLElement }>()
+  )
+
   const getProcesses = useCallback(
     singleton(async () => {
       if (!device) return
@@ -85,12 +91,25 @@ export default observer(function Process() {
       const infos = packageInfosRef.current
       const byPackage = new Map(infos.map((info) => [info.packageName, info]))
 
+      const alive = new Set<string>()
       let list = all.map((item: any) => {
         // 正则每个进程只跑一次：放 find 回调里会变成 266 进程 × 700 包
         const matched = item.name.match(PKG_RE)
         const pkgName = matched ? matched[0] : ''
         const info = pkgName ? byPackage.get(pkgName) : undefined
         if (!info) return item
+
+        const key = String(item.pid ?? item.name)
+        alive.add(key)
+        const cached = rowCache.current.get(key)
+        if (cached && cached.packageName === info.packageName) {
+          return {
+            ...item,
+            packageName: info.packageName,
+            label: info.label,
+            name: cached.nameEl,
+          }
+        }
 
         // 进程名/应用名来自设备，直接拼 HTML 会被注入：用 DOM API 拼
         const icon = info.icon || fallbackIcon(info.label, info.packageName)
@@ -104,6 +123,7 @@ export default observer(function Process() {
           )
         )
 
+        rowCache.current.set(key, { packageName: info.packageName, nameEl })
         return {
           ...item,
           packageName: info.packageName,
@@ -111,6 +131,10 @@ export default observer(function Process() {
           name: nameEl,
         }
       })
+      // 掉线的进程从缓存里清掉，否则长时间开着会一直涨
+      for (const key of rowCache.current.keys()) {
+        if (!alive.has(key)) rowCache.current.delete(key)
+      }
 
       // 「仅显示应用」：只留能对上已安装包的进程
       if (!isEmpty(packagesRef.current) && store.process.onlyPackage) {

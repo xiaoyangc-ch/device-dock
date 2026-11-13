@@ -51,8 +51,30 @@ export function getTheme() {
 }
 
 const logger = log('handleEvent')
+/**
+ * 只放行应用自己的页面调 IPC。
+ *
+ * 所有窗口都挂了同一个 preload（pushFile/deleteFile/diskRun 全在里面），
+ * 导航兜底只能挡住外部网页，这里再挡一层非应用来源：
+ * 打包/构建后页面都是 file://，dev server 与 devtools 在 localhost。
+ */
+/** 应用自己的页面：打包/构建后都是 file://，dev server 与 devtools 在 localhost。 */
+export function isAppUrl(url: string): boolean {
+  if (!url) return false
+  if (url.startsWith('file://')) return true
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)
+}
+
+function isTrustedSender(event: any): boolean {
+  return isAppUrl(event?.senderFrame?.url || '')
+}
+
 export function handleEvent(channel: string, listener: types.AnyFn) {
   ipcMain.handle(channel, (event: any, ...args) => {
+    if (!isTrustedSender(event)) {
+      logger.warn('reject ipc from untrusted sender', channel)
+      throw new Error('拒绝来自非应用页面的 IPC 调用')
+    }
     logger.debug(channel, ...args)
     return listener(...args)
   })

@@ -446,6 +446,9 @@ const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
   const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
 
+  // portScan 的取消槽是单槽：新一轮开始前先取消上一轮，
+  // 否则第二次扫描会盖掉第一次的 token，用户点「取消」只能取消新的那次
+  cancelPortScan()
   const token = { cancelled: false }
   deviceScan = token
 
@@ -462,6 +465,8 @@ const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
     if (known.length) {
       const adbPorts = [...new Set(known)].sort((a, b) => a - b)
       logger.info('reuse known adb port', h, adbPorts)
+      // 提前返回也要清 token，否则 deviceScan 永远指着这一次
+      if (deviceScan === token) deviceScan = null
       return {
         ip: h,
         adbPorts,

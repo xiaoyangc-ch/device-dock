@@ -18,7 +18,10 @@ import {
 
 const logger = log('recording')
 
-const sessions = new Map<string, { stream: fs.WriteStream; file: string }>()
+const sessions = new Map<
+  string,
+  { stream: fs.WriteStream; file: string; deviceId: string }
+>()
 
 function timestamp() {
   const d = new Date()
@@ -29,6 +32,20 @@ function timestamp() {
 }
 
 const start: IpcRecordingStart = async (deviceId) => {
+  // 同一设备重复 start（连点 / 面板重载）会留下没人 end 的流和半截 webm：
+  // 新会话开始前先把旧的正常收尾
+  for (const [oldId, old] of [...sessions]) {
+    if (old.deviceId === deviceId) {
+      sessions.delete(oldId)
+      try {
+        old.stream.end()
+      } catch {
+        // ignore
+      }
+      logger.warn('recording restart, closed previous session', old.file)
+    }
+  }
+
   const dir = getUserDataPath('recordings')
   fs.mkdirSync(dir, { recursive: true })
 
@@ -38,7 +55,7 @@ const start: IpcRecordingStart = async (deviceId) => {
   stream.on('error', (e) => logger.error('write failed', e))
 
   const id = uniqId('rec')
-  sessions.set(id, { stream, file })
+  sessions.set(id, { stream, file, deviceId })
   logger.info('recording start', file)
   return { id, path: file }
 }
@@ -75,7 +92,12 @@ const stop: IpcRecordingStop = async (id) => {
   if (!session) return { path: '' }
 
   sessions.delete(id)
-  await new Promise<void>((resolve) => session.stream.end(() => resolve()))
+  // 流已经 emit 过 error（autoDestroy）时 end 的回调不保证被调用，
+  // 直接 await 会让 IPC 悬着、按钮卡在「停止中」
+  await Promise.race([
+    new Promise<void>((resolve) => session.stream.end(() => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+  ])
   logger.info('recording stop', session.file)
   return { path: session.file }
 }

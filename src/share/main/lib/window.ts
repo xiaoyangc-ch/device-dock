@@ -17,7 +17,7 @@ import defaults from 'licia/defaults'
 import path from 'path'
 import { attachTitlebarToWindow } from 'custom-electron-titlebar/main'
 import { colorBgContainer, colorBgContainerDark } from 'common/theme'
-import { getTheme } from './util'
+import { getTheme, isAppUrl } from './util'
 import isWindows from 'licia/isWindows'
 import isMac from 'licia/isMac'
 import debounce from 'licia/debounce'
@@ -132,10 +132,10 @@ function applyBounds(
     options.x = opts.x
     options.y = opts.y
   }
-  if (opts.width <= area.width && opts.height <= area.height) {
-    options.width = opts.width
-    options.height = opts.height
-  }
+  // 尺寸逐维 clamp：两维都满足才写入的话，大屏存的 1280×900 换到小屏
+  // 会两维都不写、退回 Electron 默认的 800×600，底部内容直接被砍掉
+  options.width = Math.min(opts.width, area.width)
+  options.height = Math.min(opts.height, area.height)
 }
 
 export function create(opts: IWinOptions) {
@@ -283,13 +283,6 @@ export function sendTo(name: string, channel: string, ...args: any[]) {
   if (win && !win.isDestroyed()) {
     win.webContents.send(channel, ...args)
   }
-}
-
-// 应用自己的页面：打包/构建后都走 file:// 加载 index.html；
-// dev server 与 devtools 调试页在 localhost，一并放行。
-function isAppUrl(url: string) {
-  if (url.startsWith('file://')) return true
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)
 }
 
 export function loadPage(win: BrowserWindow, q: types.PlainObj<string> = {}) {

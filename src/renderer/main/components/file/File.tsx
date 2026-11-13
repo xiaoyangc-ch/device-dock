@@ -159,8 +159,11 @@ export default observer(function File() {
   }, [device ? device.id : ''])
 
   function cacheDir(cacheKey: string, files: IFile[], count: number) {
-    // 30 个目录 × 3000 条会把几十万个对象（含 data URL 图标）常驻在渲染进程
-    if (dirCache.size > DIR_CACHE_MAX) {
+    // 30 个目录 × 3000 条会把几十万个对象（含 data URL 图标）常驻在渲染进程。
+    // Map 的迭代顺序是插入顺序，不 delete 再 set 的话「命中」不会刷新位置，
+    // A/B 来回切时 A 会被一直当成最旧而反复淘汰（那是 FIFO 不是 LRU）
+    dirCache.delete(cacheKey)
+    if (dirCache.size >= DIR_CACHE_MAX) {
       const oldest = dirCache.keys().next().value
       if (oldest !== undefined) dirCache.delete(oldest)
     }
@@ -219,6 +222,11 @@ export default observer(function File() {
     const seq = ++navSeq.current
     const cacheKey = device.id + ':' + target
     const cached = dirCache.get(cacheKey)
+    if (cached) {
+      // 命中即刷新 LRU 位置
+      dirCache.delete(cacheKey)
+      dirCache.set(cacheKey, cached)
+    }
 
     if (!force && cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
       // 命中缓存也要结束 loading：上一轮可能是另一个目录还在转圈，
@@ -615,6 +623,12 @@ export default observer(function File() {
     if (!device) return
 
     setSelected(item)
+    // 目录在设备端没有可读的文件 URL：只选中，别发一次注定失败的 IPC
+    // （图标视图自己判过，列表视图走这里，统一在这里拦）
+    if (item.directory) {
+      if (seq === selectSeq.current) setSelectedUrl('')
+      return
+    }
     try {
       const url = await main.getFileUrl(device.id, absPath(item))
       if (seq === selectSeq.current) setSelectedUrl(url)
@@ -1294,13 +1308,7 @@ export default observer(function File() {
                     return
                   }
 
-                  // 目录没有可预览 URL：只选中，别发一次注定失败的 getFileUrl
-                  if (files[0].directory) {
-                    setSelected(files[0])
-                    setSelectedUrl('')
-                  } else {
-                    preview(files[0])
-                  }
+                  preview(files[0])
                 }}
                 onDeselect={() => {
                   setSelectedFiles([])

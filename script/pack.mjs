@@ -35,6 +35,12 @@ const config = {
         target: 'nsis',
         arch: ['x64'],
       },
+      {
+        // 免安装 zip：mac 上打不了 NSIS（makensis 是 x86_64），
+        // 靠这个产物给出可直接解压运行的分发包
+        target: 'zip',
+        arch: ['x64'],
+      },
     ],
     icon: 'build/icon.ico',
   },

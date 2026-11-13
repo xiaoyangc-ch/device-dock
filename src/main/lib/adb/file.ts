@@ -1537,6 +1537,10 @@ async function buildFileIndex(
   let found = 0
   let lastEmit = 0
   let pending: IFile[] = []
+  // 流式推送预算：关键字很短时命中可达几万条，渲染层每批 concat 重建数组
+  // （O(n²)），而 searchDir resolve 后只用第一页——推多了纯属白做
+  let sent = 0
+  const EMIT_MAX = 1000
 
   const flush = (force = false) => {
     if (!pending.length) return
@@ -1544,7 +1548,12 @@ async function buildFileIndex(
     // 渲染层每接一批都会重建表格行：整盘搜索时 600ms 一次才不卡
     if (!force && now - lastEmit < 600) return
     lastEmit = now
-    emit(pending)
+    if (sent < EMIT_MAX) {
+      // slice 超出长度会自动截断，不用先判 pending.length
+      const batch = pending.slice(0, EMIT_MAX - sent)
+      sent += batch.length
+      emit(batch)
+    }
     pending = []
   }
 

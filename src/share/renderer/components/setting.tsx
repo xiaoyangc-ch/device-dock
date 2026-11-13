@@ -1,7 +1,7 @@
 /**
  * 设置项基础行：标题 + 控件。range 模式带滑块进度条和「当前值/最大值」。
  */
-import { PropsWithChildren, useState } from 'react'
+import { PropsWithChildren, useEffect, useRef, useState } from 'react'
 import className from 'licia/className'
 import Style from './setting.module.scss'
 import toNum from 'licia/toNum'
@@ -30,6 +30,8 @@ interface INumberProps {
 }
 
 function progress(val: number, min: number, max: number) {
+  // max 未传（0）或 <= min 时不能除零，否则宽度变成 NaN%
+  if (max <= min) return '0'
   return (((val - min) / (max - min)) * 100).toFixed(2)
 }
 
@@ -37,19 +39,31 @@ export function Number(props: INumberProps) {
   // 输入过程中保留原始字符串：直接受控成 number 会把「12.」清成「12」
   const [draft, setDraft] = useState(toStr(props.value))
 
+  // 外部（store/其它入口）改了这个值才同步 draft。
+  // 注意不能无条件覆盖：用户正在输入「12.」时 toNum 也是 12，
+  // 父级 value 跟着变成 12 会把这个点清掉——那正是 draft 要解决的问题
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  useEffect(() => {
+    if (toNum(draftRef.current) !== props.value) {
+      setDraft(toStr(props.value))
+    }
+  }, [props.value])
+
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDraft(e.target.value)
     props.onChange(toNum(e.target.value))
   }
 
-  const max = props.max || Infinity
-  const min = props.min || 0
+  // max 传 0 时不能被当成 Infinity；未传 max 时不渲染进度条
+  const max = props.max ?? 0
+  const min = props.min ?? 0
   const step = props.step || 1
 
   const input = (
     <input
       type={props.range ? 'range' : 'number'}
-      value={draft !== '' ? props.value : draft}
+      value={draft}
       onChange={onChange}
       min={min}
       max={max}

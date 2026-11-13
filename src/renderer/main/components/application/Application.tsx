@@ -163,6 +163,8 @@ export default observer(function Application() {
   const iconTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // 设备切得快时旧请求可能后到：每次刷新递增序号，回包不是最新就丢弃
   const loadSeq = useRef(0)
+  // 每个包自己的刷新序号：全量序号对同一个包的两次刷新是同一个值
+  const pkgSeq = useRef(new Map<string, number>())
 
   const { device } = store
 
@@ -244,10 +246,20 @@ export default observer(function Application() {
     }
 
     // ---------- 单包刷新（启停/清数据后） ----------
+    // 全量序号拦不住同一个包的两次刷新（同一个 seq），
+    // 快速「停用→启用」时旧回包可能覆盖新状态，这里加按包独立序号
+    const mySeq = (pkgSeq.current.get(packageName) ?? 0) + 1
+    pkgSeq.current.set(packageName, mySeq)
     const seq = loadSeq.current
     try {
       const infos = await main.getPackageInfos(deviceId, [packageName])
-      if (seq !== loadSeq.current || store.device?.id !== deviceId) return
+      if (
+        seq !== loadSeq.current ||
+        pkgSeq.current.get(packageName) !== mySeq ||
+        store.device?.id !== deviceId
+      ) {
+        return
+      }
 
       const info = infos[0]
       // 包在查询间隙被卸载时 infos 为空，不能拿 undefined 去读 enabled

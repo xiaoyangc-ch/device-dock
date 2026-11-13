@@ -5,6 +5,8 @@ import now from 'licia/now'
 import splitPath from 'licia/splitPath'
 
 const MAX_DONE_TRANSFERS = 20
+// 半小时还没完成的传输基本是主进程重启/事件丢失留下的僵尸记录
+const MAX_PENDING_MS = 30 * 60 * 1000
 
 export class File {
   // 默认列表视图：和资源管理器一致，支持 Ctrl/Shift 多选
@@ -69,16 +71,25 @@ export class File {
     main.on(
       'startTransfer',
       (id: string, type: TransferType, src: string, dest: string, size: number) => {
-        // 已完成记录只留 20 条：不清理的话长时间用下来列表会无限长
-        const done = this.transfers.filter((item) => item.done)
-        if (done.length >= MAX_DONE_TRANSFERS) {
-          const index = this.transfers.indexOf(done[0])
-          if (index >= 0) this.transfers.splice(index, 1)
-        }
-
-        this.transfers.push(new Transfer(id, type, src, dest, size))
-        // 有传输就自动打开进度面板
-        runInAction(() => (this.showTransfer = true))
+        runInAction(() => {
+          // 已完成记录只留 20 条：不清理的话长时间用下来列表会无限长
+          const done = this.transfers.filter((item) => item.done)
+          if (done.length >= MAX_DONE_TRANSFERS) {
+            const index = this.transfers.indexOf(done[0])
+            if (index >= 0) this.transfers.splice(index, 1)
+          }
+          // 主进程重启 / 事件丢失时 done:false 的僵尸任务没人清，按时间淘汰
+          const now = Date.now()
+          for (let i = this.transfers.length - 1; i >= 0; i--) {
+            const item = this.transfers[i]
+            if (!item.done && now - item.startTime.getTime() > MAX_PENDING_MS) {
+              this.transfers.splice(i, 1)
+            }
+          }
+          this.transfers.push(new Transfer(id, type, src, dest, size))
+          // 有传输就自动打开进度面板
+          this.showTransfer = true
+        })
       }
     )
 
