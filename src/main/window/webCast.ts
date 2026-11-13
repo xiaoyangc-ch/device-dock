@@ -1,3 +1,7 @@
+/**
+ * 投屏窗口：每个设备一个，视频由渲染层 WebCodecs 解到 canvas。
+ * 窗口位置/大小由 share/main/lib/window 统一保存，这里不另存 bounds。
+ */
 import * as window from 'share/main/lib/window'
 import { handleEvent } from 'share/main/lib/util'
 import { BrowserWindow, screen } from 'electron'
@@ -6,15 +10,14 @@ import { IpcGetStore, IpcSetStore } from 'share/common/types'
 import { getScreencastStore } from '../lib/store'
 import * as webCast from '../lib/webCast'
 
-// 方案 B 测试窗口：视频由 WebCodecs 解到 canvas，完全在网页层里
 const wins = new Map<string, BrowserWindow>()
 
 export function show(deviceId: string, deviceName: string) {
-  const exist = wins.get(deviceId)
-  if (exist && !exist.isDestroyed()) {
-    exist.show()
-    exist.focus()
-    return exist
+  const existing = wins.get(deviceId)
+  if (existing && !existing.isDestroyed()) {
+    existing.show()
+    existing.focus()
+    return existing
   }
 
   const win = window.create({
@@ -27,53 +30,55 @@ export function show(deviceId: string, deviceName: string) {
   })
   wins.set(deviceId, win)
 
-  // 窗口位置/大小由 share/main/lib/window 的 onSavePos 统一保存和恢复，
-  // 这里不再另存一份，避免两套 bounds 互相覆盖
-
   win.on('closed', () => {
     if (wins.get(deviceId) === win) wins.delete(deviceId)
-    // 关窗口时 React 的 cleanup 不保证执行（窗口先被销毁），
-    // 必须由主进程收掉 adb shell / 设备端 server / forward，否则设备上会留一个编码器
+    // React 的 cleanup 不保证执行（窗口先被销毁）：
+    // 必须由主进程收掉 adb shell / 设备端 server / forward，否则设备上留一个编码器
     webCast.stopWebCast(deviceId).catch(() => {})
   })
+
   window.loadPage(win, {
     page: 'webcast',
     device: deviceId,
     name: deviceName,
   })
-
   return win
 }
 
-export const showWebCast: IpcShowWebCast = async function (deviceId, name) {
+export const showWebCast: IpcShowWebCast = async (deviceId, name) => {
   show(deviceId, name)
 }
 
-// 按设备分辨率调整窗口，避免竖窗口里给横屏留大黑边（按画面比例定窗口）
+/** 按视频比例定窗口：竖屏窗口里给横屏留大黑边很难看。 */
 const lastSize = new Map<string, string>()
 
-export const resizeWebCast: IpcResizeWebCast = async function (
+export const resizeWebCast: IpcResizeWebCast = async (
   deviceId,
   videoWidth,
   videoHeight
-) {
+) => {
   const win = wins.get(deviceId)
   if (!win || win.isDestroyed() || !videoWidth || !videoHeight) return
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+
+  const { width: screenWidth, height: screenHeight } =
+    screen.getPrimaryDisplay().workAreaSize
   const toolbar = 32
-  const totalH = Math.max(480, Math.min(900, Math.round(sh * 0.82)))
-  const videoH = totalH - toolbar
-  let width = Math.round((videoH * videoWidth) / videoHeight)
-  let height = totalH
-  if (width > sw * 0.9) {
-    width = Math.round(sw * 0.9)
+  const totalHeight = Math.max(480, Math.min(900, Math.round(screenHeight * 0.82)))
+  const videoHeightPx = totalHeight - toolbar
+
+  let width = Math.round((videoHeightPx * videoWidth) / videoHeight)
+  let height = totalHeight
+  if (width > screenWidth * 0.9) {
+    width = Math.round(screenWidth * 0.9)
     height = Math.round((width * videoHeight) / videoWidth) + toolbar
   }
-  // 每次重连都 setContentSize + center 会把用户摆好的窗口拽回屏幕中间，
-  // 尺寸没变就别动，位置也只做「别跑出屏幕」的修正
+
+  // 每次重连都 setContentSize + center 会把用户摆好的窗口拽回中间：
+  // 尺寸没变就不动，位置只做「别跑出屏幕」的修正
   const key = `${width}x${height}`
   if (lastSize.get(deviceId) === key) return
   lastSize.set(deviceId, key)
+
   const bounds = win.getBounds()
   const area = screen.getDisplayMatching(bounds).workArea
   const x = Math.min(Math.max(bounds.x, area.x), area.x + area.width - width)
@@ -81,7 +86,7 @@ export const resizeWebCast: IpcResizeWebCast = async function (
   win.setBounds({ x, y, width, height })
 }
 
-export const webCastOnTop: IpcWebCastOnTop = async function (deviceId, onTop) {
+export const webCastOnTop: IpcWebCastOnTop = async (deviceId, onTop) => {
   const win = wins.get(deviceId)
   if (win && !win.isDestroyed()) win.setAlwaysOnTop(!!onTop)
 }
@@ -95,7 +100,7 @@ export function init() {
   )
   handleEvent(
     'setScreencastStore',
-    <IpcSetStore>((name, val) => getScreencastStore().set(name, val))
+    <IpcSetStore>((name, value) => getScreencastStore().set(name, value))
   )
   handleEvent('showWebCast', showWebCast)
 }

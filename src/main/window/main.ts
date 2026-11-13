@@ -1,3 +1,7 @@
+/**
+ * 主窗口：1280×850，最小 1024×700。
+ * macOS 用 hiddenInset 把红绿灯嵌进侧栏品牌区；用户显式选「原生标题栏」时退回系统框。
+ */
 import { app, BrowserWindow, session } from 'electron'
 import { getMainStore, getSettingsStore } from '../lib/store'
 import { getOpenFileFromArgv, handleEvent } from 'share/main/lib/util'
@@ -5,9 +9,9 @@ import * as window from 'share/main/lib/window'
 import * as webCastWindow from './webCast'
 import log from 'share/common/log'
 import once from 'licia/once'
-import { IpcGetStore, IpcSetStore } from 'share/common/types'
 import isMac from 'licia/isMac'
 import endWith from 'licia/endWith'
+import { IpcGetStore, IpcSetStore } from 'share/common/types'
 
 const logger = log('mainWin')
 
@@ -25,7 +29,7 @@ export function showWin() {
     return
   }
 
-  init()
+  initSession()
   initIpc()
 
   win = window.create({
@@ -35,33 +39,32 @@ export function showWin() {
     width: 1280,
     height: 850,
     menu: true,
-    // macOS 3.0：内容顶到窗口，红绿灯嵌入侧栏品牌区；用户显式选「原生标题栏」时退回系统标准框。
     customTitlebar: !isMac && !settings.get('useNativeTitlebar'),
     nativeTitlebarOverlay: isMac && !settings.get('useNativeTitlebar'),
   })
 
-  const w = win
-  w.on('close', () => {
+  const created = win
+  created.on('close', () => {
+    // 主窗口关闭 = 退出应用（走正常 quit 流程，让 adb/投屏清理跑完）
     app.quit()
   })
-  w.on('enter-full-screen', () => {
+  created.on('enter-full-screen', () => {
     window.sendTo('main', 'fullScreenChange', true)
   })
-  w.on('leave-full-screen', () => {
+  created.on('leave-full-screen', () => {
     window.sendTo('main', 'fullScreenChange', false)
   })
-  w.on('closed', () => {
-    if (win === w) win = null
+  created.on('closed', () => {
+    if (win === created) win = null
   })
 
-  window.loadPage(w)
+  window.loadPage(created)
 }
 
-const init = once(() => {
+/** ws 连接去掉 Origin：本地 websocket 服务不校验来源，带上反而被拒。 */
+const initSession = once(() => {
   session.defaultSession.webRequest.onBeforeSendHeaders(
-    {
-      urls: ['ws://*/*'],
-    },
+    { urls: ['ws://*/*'] },
     (details, callback) => {
       delete details.requestHeaders['Origin']
       callback({ requestHeaders: details.requestHeaders })
@@ -70,37 +73,36 @@ const init = once(() => {
 })
 
 const initIpc = once(() => {
-  handleEvent('setMainStore', <IpcSetStore>(
-    ((name, val) => store.set(name, val))
-  ))
+  handleEvent(
+    'setMainStore',
+    <IpcSetStore>((name, value) => store.set(name, value))
+  )
   handleEvent('getMainStore', <IpcGetStore>((name) => store.get(name)))
-  store.on('change', (name, val) => {
-    window.sendAll('changeMainStore', name, val)
+  store.on('change', (name, value) => {
+    window.sendAll('changeMainStore', name, value)
   })
+
   handleEvent('showScreencast', () => {
     const device: any = store.get('device')
-    if (device) {
-      // 测试版：外嵌 scrcpy 窗口方案已移除，直接走 WebCodecs 内嵌
-      webCastWindow.show(device.id, device.name)
-    }
+    if (!device) return
+    // 外嵌 scrcpy 窗口方案已移除，统一走 WebCodecs 内嵌
+    webCastWindow.show(device.id, device.name)
   })
+
+  // 双击 APK / 拖到 Dock / 命令行传参：直接进安装流程
   if (isMac) {
-    app.on('open-file', (_, path) => {
-      if (!endWith(path, '.apk')) {
-        return
-      }
-      if (app.isReady()) {
-        showWin()
-        window.sendTo('main', 'installPackage', path)
-      }
+    app.on('open-file', (_, filePath) => {
+      if (!endWith(filePath, '.apk')) return
+      if (!app.isReady()) return
+      showWin()
+      window.sendTo('main', 'installPackage', filePath)
     })
   } else {
     app.on('second-instance', (_, argv) => {
       const apkPath = getOpenFileFromArgv(argv, '.apk')
-      if (apkPath) {
-        showWin()
-        window.sendTo('main', 'installPackage', apkPath)
-      }
+      if (!apkPath) return
+      showWin()
+      window.sendTo('main', 'installPackage', apkPath)
     })
   }
 })
