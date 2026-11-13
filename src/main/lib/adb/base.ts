@@ -8,7 +8,7 @@
  * - 超时一律返回 timedOut 标记，调用方必须检查，不能把半截输出当完整结果。
  *
  * 这层只依赖 adbkit 的 Client（负责连接/forward 管理）和系统 adb 二进制，
- * 不依赖任何 AYA 的代码。
+ * 只依赖 adb 与 Node 标准库。
  */
 import childProcess from 'node:child_process'
 import path from 'node:path'

@@ -8,7 +8,7 @@ import java.lang.reflect.Method
 
 class PackageManager(private val manager: IInterface) {
     companion object {
-        private const val TAG = "Aya.PackageManager"
+        private const val TAG = "DeviceDock.PackageManager"
     }
 
     private val getPackageInfoMethod: Method by lazy {

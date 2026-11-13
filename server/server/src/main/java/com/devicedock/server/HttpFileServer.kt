@@ -10,7 +10,7 @@ import java.net.URLDecoder
 
 class HttpFileServer(port: Int) : NanoHTTPD(port) {
     private companion object {
-        private const val TAG = "Aya.HttpFileServer"
+        private const val TAG = "DeviceDock.HttpFileServer"
     }
 
     override fun serve(session: IHTTPSession): Response {

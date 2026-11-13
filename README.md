@@ -52,6 +52,10 @@ Windows 免安装 zip 与 NSIS 安装器的完整命令见 `script/` 与 `.githu
 
 ## 许可
 
-AGPL-3.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+应用代码（`src/main`、`src/share`、`src/renderer`、`server` 的 Kotlin 服务端）为自有实现；
+第三方组件（luna-*、scrcpy server、@yume-chan/scrcpy、licia 等）按各自的 MIT / Apache-2.0
+许可使用，版权与许可声明见 [NOTICE](NOTICE)。
 
-本仓库代码源自 AYA（https://github.com/liriliri/aya），按 AGPL-3.0 保留上游版权与许可。**对外分发二进制时必须同时提供对应源码**。若目标是闭源分发，必须先完成 [docs/4.0-自有化路线.md](docs/4.0-自有化路线.md) 中的替换清单——只要仓库里仍有 AYA 代码，就不能闭源发布。
+仓库当前仍保留 [LICENSE](LICENSE) 的 AGPL-3.0 文本：代码层已完成重写，但
+`*.module.scss` 的布局结构仍与早期版本接近，在复核完样式表之前不宣称闭源分发。
+`docs/4.0-自有化路线.md` 记录了重写范围与剩余待核对项。

@@ -9,7 +9,7 @@ import java.lang.reflect.Method
 
 class StorageStatsManager(private val manager: IInterface) {
     companion object {
-        private const val TAG = "Aya.StorageStatsManager"
+        private const val TAG = "DeviceDock.StorageStatsManager"
     }
 
     private val queryStatsForPackageMethod: Method by lazy {

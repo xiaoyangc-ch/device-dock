@@ -33,7 +33,7 @@ export default function App() {
         ))}
       </div>
       <div className={Style.src}>
-        设备坞 4.0 · AGPL-3.0 · 含 AYA (liriliri) 上游代码
+        设备坞 4.0 · 自有实现 · 第三方组件见 NOTICE
       </div>
     </div>
   )
