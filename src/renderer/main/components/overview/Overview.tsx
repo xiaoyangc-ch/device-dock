@@ -25,14 +25,10 @@ import PageToolbar, {
 } from '../layout/PageToolbar'
 
 export default observer(function Overview() {
-  const [portModalVisible, setPortModalVisible] = useState(false)
-  const [remoteControllerModalVisible, setRemoteControllerModalVisible] =
-    useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [overview, setOverview] = useState<
     types.PlainObj<string | number | boolean>
   >({})
-  const [fontModalVisible, setFontModalVisible] = useState(false)
 
   // 切设备时旧请求可能后到：只认最后一次，别让上一台的数据盖住新设备
   const loadSeq = useRef(0)
@@ -224,7 +220,7 @@ export default observer(function Overview() {
                 t('fontScale'),
                 overview.fontScale ? `${overview.fontScale}x` : '1x',
                 overview.fontScale
-                  ? () => setFontModalVisible(true)
+                  ? () => store.openModal('fontAdjust')
                   : undefined
               )}
             </div>
@@ -232,10 +228,10 @@ export default observer(function Overview() {
         </div>
 
         <FontAdjustModal
-          visible={fontModalVisible}
+          visible={store.activeModal === 'fontAdjust'}
           initialScale={overview.fontScale as number}
           onClose={() => {
-            setFontModalVisible(false)
+            store.closeModal('fontAdjust')
             refresh()
           }}
         />
@@ -267,13 +263,13 @@ export default observer(function Overview() {
           icon="icon-bidirection"
           disabled={!device}
           title={t('portMapping')}
-          onClick={() => setPortModalVisible(true)}
+          onClick={() => store.openModal('portMapping')}
         />
         <ToolButton
           icon="icon-remote-controller"
           disabled={!device}
           title={t('remoteController')}
-          onClick={() => setRemoteControllerModalVisible(true)}
+          onClick={() => store.openModal('remoteController')}
         />
         <ToolSpace />
         <ToolButton
@@ -285,12 +281,12 @@ export default observer(function Overview() {
       </PageToolbar>
       {content}
       <PortMappingModal
-        visible={portModalVisible}
-        onClose={() => setPortModalVisible(false)}
+        visible={store.activeModal === 'portMapping'}
+        onClose={() => store.closeModal('portMapping')}
       />
       <RemoteControllerModal
-        visible={remoteControllerModalVisible}
-        onClose={() => setRemoteControllerModalVisible(false)}
+        visible={store.activeModal === 'remoteController'}
+        onClose={() => store.closeModal('remoteController')}
       />
     </Page>
   )

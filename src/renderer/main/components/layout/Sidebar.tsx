@@ -1,5 +1,4 @@
 import { observer } from 'mobx-react-lite'
-import { useState } from 'react'
 import store from '../../store'
 import { t } from 'common/util'
 import Style from './Sidebar.module.scss'
@@ -36,7 +35,6 @@ const GROUPS = [
 ]
 
 export default observer(function Sidebar() {
-  const [settingsVisible, setSettingsVisible] = useState(false)
   const collapsed = store.settings.sidebarCollapsed
   const online = store.devices.filter((item) => item.type !== 'offline').length
 
@@ -95,7 +93,7 @@ export default observer(function Sidebar() {
         <button
           className={Style.settings}
           title={t('settings')}
-          onClick={() => setSettingsVisible(true)}
+          onClick={() => store.openModal('settings')}
         >
           <span className="icon-setting" />
         </button>
@@ -111,8 +109,8 @@ export default observer(function Sidebar() {
       </div>
 
       <SettingsModal
-        visible={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
+        visible={store.activeModal === 'settings'}
+        onClose={() => store.closeModal('settings')}
       />
     </aside>
   )

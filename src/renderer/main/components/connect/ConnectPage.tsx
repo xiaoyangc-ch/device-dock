@@ -92,7 +92,6 @@ export default observer(function ConnectPage() {
   const [portScanning, setPortScanning] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [progress, setProgress] = useState('')
-  const [pairVisible, setPairVisible] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<DataGrid | null>(null)
 
@@ -266,7 +265,7 @@ export default observer(function ConnectPage() {
         <ToolSeparator />
         <ToolButton
           label={t('pair')}
-          onClick={() => setPairVisible(true)}
+          onClick={() => store.openModal('pair')}
           disabled={connecting || portScanning}
         />
         <ToolButton
@@ -346,8 +345,8 @@ export default observer(function ConnectPage() {
         )}
       </div>
       <CodePairModal
-        visible={pairVisible}
-        onClose={() => setPairVisible(false)}
+        visible={store.activeModal === 'pair'}
+        onClose={() => store.closeModal('pair')}
       />
     </Page>
   )

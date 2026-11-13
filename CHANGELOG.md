@@ -11,6 +11,10 @@
 - 代码层自有化：`src/main`（约 7k 行）、`src/share`（2.6k 行）、`src/renderer`（8.4k 行）全部重写为自有实现；`server/` 的 Kotlin 日志 tag 去掉上游标识并重编 dex
 - 投屏窗口重构：拆成 `cast/protocol`（线协议）、`cast/control`（控制通道）、`cast/transport`（流适配）、`cast/session`（会话状态机）、`cast/input`（指针/键盘）、`cast/recorder`（录制）六层，替代原来的单文件巨型 effect
 - 样式层自有化：25 个 `*.module.scss` 换新类名体系并扁平化嵌套，同步组件引用；`theme.scss` 的 token 与 3.0 壳层的 `--ui-*` 变量保留
+- 许可证切换：`LICENSE` 由 AGPL-3.0 改为专有许可，`package.json` 的 `license` 改为 `UNLICENSED`；第三方 MIT/Apache 组件的声明保留在 `NOTICE`
+- 弹窗互斥：侧栏设置、端口映射、遥控器、包信息、配对、字号调节统一由 `store.activeModal` 管理，同一时刻只显示一个
+- 修复开发模式下 userData 落到 `Application Support/Electron` 的问题（改用 `app.isPackaged` 判断），配置、录制、文件索引与打包版共用一份
+- 新增 `cast/protocol` 单元测试 11 个（按键/文本/触摸/滚动/剪贴板/半包/未知类型）
 
 - 修复全盘搜索的存储视图重复：`/sdcard`、`/mnt/pass_through`、`/mnt/androidwritable`、`/mnt/installer`、`/mnt/user` 是同一份存储的运行时视图，整根 `find -L` 会让同一个文件出现 7 条，改为容器根只取真实子目录 + 按名字排除视图
 - 全盘搜索二次查询走内存索引，实测 1.1 秒建索引、2ms 命中

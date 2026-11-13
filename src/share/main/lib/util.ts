@@ -30,8 +30,10 @@ export function resolveResources(p: string) {
   return ret
 }
 
-if (isDev()) {
-  // 开发版和正式版共用 productName 下的 userData，配置/窗口位置保持一致
+// 开发版和正式版共用 productName 下的 userData：
+// 打包后 Electron 会自动用 productName，未打包时默认是 "Electron"，
+// 不统一的话调试时的配置/录制/索引和正式版各存一份，互不相通
+if (!app.isPackaged) {
   app.setPath('userData', path.resolve(app.getPath('appData'), pkg.productName))
 }
 

@@ -149,7 +149,6 @@ export default observer(function Application() {
   // 与文件页一致：单击只选中，双击才是打开；详情走工具栏/右键
   const [selectedPackage, setSelectedPackage] = useState('')
   const [dropHighlight, setDropHighlight] = useState(false)
-  const [infoModalVisible, setInfoModalVisible] = useState(false)
   const [openAnimating, setOpenAnimating] = useState(false)
   const [openEffectStyle, setOpenEffectStyle] = useState({
     left: 0,
@@ -333,7 +332,7 @@ export default observer(function Application() {
     if (!found) return
 
     setPackageInfo(found)
-    setInfoModalVisible(true)
+    store.openModal('packageInfo')
   }
 
   function confirmText(key: string, info: IPackageInfo) {
@@ -690,8 +689,8 @@ export default observer(function Application() {
       {!isNull(packageInfo) && (
         <PackageInfoModal
           packageInfo={packageInfo}
-          visible={infoModalVisible}
-          onClose={() => setInfoModalVisible(false)}
+          visible={store.activeModal === 'packageInfo'}
+          onClose={() => store.closeModal('packageInfo')}
         />
       )}
     </Page>

@@ -16,6 +16,8 @@ class Store extends BaseStore {
   device: IDevice | null = null
   // 默认落到文件页：日常用得最多，也让新壳层一进来就有内容
   panel = 'file'
+  // 同一时刻只允许一个弹窗：设置/端口映射/遥控器各自独立开关会叠在一起
+  activeModal = ''
   settings = new Settings()
   application = new Application()
   process = new Process()
@@ -31,8 +33,11 @@ class Store extends BaseStore {
       panel: observable,
       settings: observable,
       ready: observable,
+      activeModal: observable,
       selectDevice: action,
       selectPanel: action,
+      openModal: action,
+      closeModal: action,
     })
 
     this.bindEvent()
@@ -52,6 +57,15 @@ class Store extends BaseStore {
   selectPanel(panel: string) {
     this.panel = panel
     setMainStore('panel', panel)
+  }
+
+  openModal(name: string) {
+    this.activeModal = name
+  }
+
+  closeModal(name?: string) {
+    // 传 name 时只有当前弹窗是自己才关：避免 A 的关闭回调把 B 关掉
+    if (!name || this.activeModal === name) this.activeModal = ''
   }
 
   private async init() {
