@@ -252,7 +252,7 @@ export default observer(function ConnectPage() {
         <ToolButton
           label={
             portScanning
-              ? t('connectScanning')
+              ? progress || t('connectScanning')
               : connecting
                 ? t('connectingPreview')
                 : t('connect')

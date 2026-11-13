@@ -427,10 +427,38 @@ function normalizeHost(host: string | undefined): string {
     .replace(/:\d+$/, '')
 }
 
+async function waitDeviceOnline(
+  host: string,
+  port: number,
+  timeoutMs = 8000
+): Promise<boolean> {
+  const target = `${host}:${port}`
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const devices = await client.listDevices()
+      const found = devices.find((d) => d.id === target)
+      if (found && found.type === 'device') return true
+      // unauthorized 需要用户在手机上点允许：也算连接流程走完，不再空等
+      if (found && found.type === 'unauthorized') return true
+    } catch {
+      // adb server 忙/重启：继续轮询
+    }
+    await sleep(250)
+  }
+  return false
+}
+
 const connectDevice: IpcConnectDevice = async (host, port) => {
   const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
-  await client.connect(h, port || 5555)
+  const p = port || 5555
+  // adb connect 返回只代表命令被接受：设备可能还停在 offline，
+  // 立刻刷新列表会看不到它，用户以为“扫到端口却没连上”
+  await client.connect(h, p)
+  if (!(await waitDeviceOnline(h, p))) {
+    throw new Error('设备未上线：请确认已开启 ADB 调试并在手机上允许授权')
+  }
 }
 
 const disconnectDevice: IpcDisconnectDevice = async (host, port) => {
@@ -508,11 +536,8 @@ const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
           client.connect(h, port).catch(() => undefined),
           sleep(2500),
         ])
-        await sleep(200)
-        const devices = await client.listDevices()
-        if (
-          devices.some((d) => d.id === `${h}:${port}` && d.type === 'device')
-        ) {
+        // 再用 online 轮询确认：connect 命令返回时设备往往还是 offline
+        if (await waitDeviceOnline(h, port, 2500)) {
           logger.info('adb connect fallback ok', h, port)
           result.adbPorts = [port]
           break
@@ -710,6 +735,9 @@ export async function init() {
     try {
       const tracker = await client.trackDevices()
       tracker.on('add', onDeviceAdded)
+      // unauthorized → device（用户在手机上点“允许调试”）只会发 change，不发 add；
+      // 不订阅的话，扫描连上后列表一直不刷新，看起来就是“扫到端口但没连上”
+      tracker.on('change', onDeviceAdded)
       tracker.on('remove', (device: Device) => onDeviceRemoved(device.id))
       tracker.on('error', () => {
         logger.error('tracker error')
