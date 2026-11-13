@@ -1,3 +1,9 @@
+/**
+ * 设备管理层：枚举、属性、概览、截屏、连接/配对、adb server 生命周期。
+ *
+ * 这里只做「设备」这一层的事，具体功能（文件/应用/日志/终端）在 adb/ 子目录里。
+ * 设备属性按 60 秒缓存：列表刷新很频繁，但型号/系统版本几乎不变。
+ */
 import { app } from 'electron'
 import Adb, { Client, Device } from '@devicefarmer/adbkit'
 import androidDeviceList from 'android-device-list'
@@ -6,22 +12,16 @@ import {
   handleEvent,
   getUserDataPath,
 } from 'share/main/lib/util'
-import map from 'licia/map'
-import types from 'licia/types'
-import filter from 'licia/filter'
-import isStrBlank from 'licia/isStrBlank'
-import trim from 'licia/trim'
-import startWith from 'licia/startWith'
-import toNum from 'licia/toNum'
-import contain from 'licia/contain'
 import * as window from 'share/main/lib/window'
 import fs from 'fs-extra'
+import path from 'node:path'
+import childProcess from 'node:child_process'
+import { createHash } from 'node:crypto'
+import sleep from 'licia/sleep'
 import { getSettingsStore } from './store'
-import isWindows from 'licia/isWindows'
-import isEmpty from 'licia/isEmpty'
 import * as base from './adb/base'
-import * as webCast from './webCast'
 import { shell, getAdbPath, spawnAdb } from './adb/base'
+import * as webCast from './webCast'
 import * as logcat from './adb/logcat'
 import * as shellAdb from './adb/shell'
 import * as server from './adb/server'
@@ -44,21 +44,23 @@ import {
   IpcScreencap,
   IpcScreencapRaw,
 } from 'common/types'
-import path from 'node:path'
-import childProcess from 'node:child_process'
-import { createHash } from 'node:crypto'
-import isMac from 'licia/isMac'
-import sleep from 'licia/sleep'
 
 const logger = log('adb')
-
 const settingsStore = getSettingsStore()
 
 let client: Client
 
+/** 设备属性缓存：60 秒内复用，设备增删/adb 重启时清空。 */
+const deviceInfoCache = new Map<string, { at: number; info: any }>()
+const DEVICE_INFO_TTL = 60 * 1000
+
+/** 已预热过设备服务的设备，避免重复推 dex。 */
 const prewarmed = new Set<string>()
+
+/** 侧栏预览上一帧的哈希，画面没变就不重复解码。 */
+const lastFrameHash = new Map<string, string>()
+
 function schedulePrewarm(deviceId: string) {
-  // 排障开关：DEVICEDOCK_NO_PREWARM=1 可关掉预热做 A/B
   if (process.env.DEVICEDOCK_NO_PREWARM || prewarmed.has(deviceId)) return
   prewarmed.add(deviceId)
   // 别和启动时的设备枚举抢 adb
@@ -67,53 +69,41 @@ function schedulePrewarm(deviceId: string) {
   }, 5000)
 }
 
-// 型号/系统版本基本不变：设备列表每次刷新都拉一遍 getProperties 是 10 台设备 × 几百行属性。
-// 60 秒内复用；设备移除/重启 adb 时清空。
-const deviceInfoCache = new Map<string, { ts: number; info: any }>()
-const DEVICE_INFO_TTL = 60000
+// ---------------------------------------------------------------------------
+// 设备列表
+// ---------------------------------------------------------------------------
 
-const getDevices: IpcGetDevices = async function () {
-  let devices = await client.listDevices()
-  devices = filter(
-    devices,
-    (device: Device) => device.type === 'emulator' || device.type === 'device'
+const getDevices: IpcGetDevices = async () => {
+  if (!client) return []
+
+  const devices = (await client.listDevices()).filter(
+    (device) => device.type === 'emulator' || device.type === 'device'
   )
-  if (devices.length) {
-    schedulePrewarm(devices[0].id)
-  }
+  if (devices.length) schedulePrewarm(devices[0].id)
 
   return Promise.all(
-    map(devices, async (device: Device) => {
+    devices.map(async (device) => {
       const cached = deviceInfoCache.get(device.id)
-      if (cached && Date.now() - cached.ts < DEVICE_INFO_TTL) {
+      if (cached && Date.now() - cached.at < DEVICE_INFO_TTL) {
         return { ...cached.info, type: device.type }
       }
+
       try {
         const properties = await client.getDevice(device.id).getProperties()
-
-        let name = `${properties['ro.product.manufacturer']} ${properties['ro.product.model']}`
-        const marketName = getMarketName(properties)
-        if (marketName) {
-          name = marketName
-        }
-
         const info = {
           id: device.id,
           type: device.type,
           serialno: properties['ro.serialno'] || '',
-          name,
+          name: listName(properties),
           androidVersion: properties['ro.build.version.release'],
           sdkVersion: properties['ro.build.version.sdk'],
         }
-        deviceInfoCache.set(device.id, { ts: Date.now(), info })
+        deviceInfoCache.set(device.id, { at: Date.now(), info })
         return info
       } catch (e) {
-        // 单台设备离线/未授权不能让整张列表消失（原来 Promise.all 的 .catch 直接返回 []）
+        // 单台设备离线/未授权不能让整张列表消失
         logger.error('getProperties failed', device.id, e)
-        // 失败时退回上一次的名称：离线设备也不至于从「型号名」变成一串 IP
-        if (cached) {
-          return { ...cached.info, type: device.type }
-        }
+        if (cached) return { ...cached.info, type: device.type }
         return {
           id: device.id,
           type: device.type,
@@ -127,10 +117,28 @@ const getDevices: IpcGetDevices = async function () {
   )
 }
 
+/** 列表里的设备名：厂商市场名优先，其次「厂商 型号」。 */
+function listName(properties: Record<string, string>): string {
+  const marketName = getMarketName(properties)
+  if (marketName) return marketName
+  const vendor = properties['ro.product.manufacturer'] || ''
+  const model = properties['ro.product.model'] || ''
+  return `${vendor} ${model}`.trim()
+}
+
+/** 概览页的设备名：市场名优先，其次设备内部名（保持原有显示习惯）。 */
+function overviewName(properties: Record<string, string>): string {
+  return getMarketName(properties) || properties['ro.product.name'] || ''
+}
+
+// ---------------------------------------------------------------------------
+// 概览
+// ---------------------------------------------------------------------------
+
 async function getOverview(deviceId: string) {
   const device = client.getDevice(deviceId)
-  // 概览原来要 9 次 adb shell 往返（uname/font_scale/wifi/ip addr/wm×2/meminfo/diskstats/id）。
-  // 合并成两条批量 shell + 一次 getProperties，概览页和侧栏分辨率的加载速度能快一截。
+  // 9 条命令合并成 2 条批量 shell + 1 次 getProperties：
+  // 每多一次 adb 往返，概览页就多几十毫秒
   const [properties, cpus, baseInfo, sysInfo] = await Promise.all([
     device.getProperties(),
     getCpus(deviceId, false),
@@ -148,18 +156,13 @@ async function getOverview(deviceId: string) {
   const [kernelVersion, fontScale, wifi, ipOut] = baseInfo
   const [wmSize, wmDensity, memInfo, diskStats, idOut] = sysInfo
 
-  let ssidMatch = wifi.match(/mWifiInfo\s+SSID: "?(.+?)"?,/)
-  if (ssidMatch && ssidMatch[1] === '<unknown ssid>') {
-    ssidMatch = null
-  }
-
   const net = parseIpAndMac(ipOut)
   const screen = parseScreen(wmSize, wmDensity)
   const memory = parseMemory(memInfo)
   const storage = parseStorage(diskStats)
 
   return {
-    name: getMarketName(properties) || properties['ro.product.name'],
+    name: overviewName(properties),
     processor: properties['ro.product.board'] || '',
     abi: properties['ro.product.cpu.abi'],
     brand: properties['ro.product.brand'],
@@ -167,54 +170,62 @@ async function getOverview(deviceId: string) {
     serialno: properties['ro.serialno'] || '',
     cpuNum: cpus.length,
     kernelVersion,
-    fontScale: fontScale === 'null' ? 0 : toNum(fontScale),
-    wifi: ssidMatch ? ssidMatch[1] : net.netType,
+    fontScale: fontScale === 'null' ? 0 : Number(fontScale) || 0,
+    wifi: parseWifiSsid(wifi) || net.netType,
     ip: net.ip,
     mac: net.mac,
-    root: contain(idOut, 'uid=0'),
+    root: String(idOut).includes('uid=0'),
     ...storage,
     ...memory,
     ...screen,
   }
 }
 
+/**
+ * `ip addr` 按接口切块，优先 wlan0，其次 eth0，最后任意非 lo 且带 IPv4 的接口。
+ */
 function parseIpAndMac(out: string) {
-  const blocks = out.split(/\n(?=\d+: )/)
-  let ip = ''
-  let mac = ''
-  let netType = ''
+  const interfaces = String(out)
+    .split(/\n(?=\d+: )/)
+    .map((block) => ({
+      block,
+      name: (block.match(/^\d+: ([^:@]+)/) || [])[1] || '',
+      hasIpv4: /inet (?!127\.)/.test(block),
+    }))
 
   const pick = (name: string) =>
-    blocks.find((b) => new RegExp(`^\\d+: ${name}[:@]`).test(b))
-  const usable = (b?: string) => !!b && /inet (?!127\.)/.test(b)
-
+    interfaces.find((item) => item.name === name && item.hasIpv4)
   let target = pick('wlan0')
-  if (usable(target)) {
-    netType = '无线网络'
-  } else {
+  let netType = '无线网络'
+  if (!target) {
     target = pick('eth0')
-    if (usable(target)) {
-      netType = '有线网络'
-    } else {
-      target = blocks.find((b) => !/^1: lo/.test(b) && /inet (?!127\.)/.test(b))
-      if (target) netType = '网络'
-    }
+    netType = '有线网络'
+  }
+  if (!target) {
+    target = interfaces.find((item) => item.name !== 'lo' && item.hasIpv4)
+    netType = '网络'
   }
 
+  let ip = ''
+  let mac = ''
   if (target) {
-    const ipMatch = target.match(/inet (\d+\.\d+\.\d+\.\d+)/)
-    const macMatch = target.match(
+    const ipMatch = target.block.match(/inet (\d+\.\d+\.\d+\.\d+)/)
+    const macMatch = target.block.match(
       /link\/ether (([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2}))/
     )
     if (ipMatch) ip = ipMatch[1]
     if (macMatch) mac = macMatch[1]
   }
 
-  return {
-    ip,
-    mac,
-    netType,
-  }
+  return { ip, mac, netType }
+}
+
+/** 从 dumpsys wifi 里取 SSID；`<unknown ssid>` 视为未连接。 */
+function parseWifiSsid(out: string): string {
+  const matched = String(out).match(/mWifiInfo\s+SSID: "?(.+?)"?,/)
+  const ssid = matched?.[1]
+  if (!ssid || ssid === '<unknown ssid>') return ''
+  return ssid
 }
 
 async function getIpAndMac(deviceId: string) {
@@ -222,53 +233,41 @@ async function getIpAndMac(deviceId: string) {
 }
 
 async function getInputMethod(deviceId: string) {
-  const out = await shell(deviceId, 'settings get secure default_input_method')
-  return out.trim()
+  return String(
+    await shell(deviceId, 'settings get secure default_input_method')
+  ).trim()
 }
 
 async function setFontScale(deviceId: string, scale: number) {
   await shell(deviceId, `settings put system font_scale ${scale}`)
 }
 
-function getMarketName(properties: types.PlainObj<string>) {
+/** 厂商市场名：各品牌自定义属性不同，按优先级取第一个有值的。 */
+function getMarketName(properties: Record<string, string>): string {
   const keys = [
-    // Oppo
     'ro.oppo.market.name',
-    // Huawei, Honor
     'ro.config.marketing_name',
-    // OnePlus, Realme
     'ro.vendor.oplus.market.enname',
-    // Vivo
     'ro.vivo.market.name',
-    // Xiaomi, Redmi
     'ro.product.marketname',
-    // Asus
     'ro.asus.product.mkt_name',
   ]
-  for (let i = 0, len = keys.length; i < len; i++) {
-    const key = keys[i]
-    if (properties[key]) {
-      return properties[key]
-    }
+  for (const key of keys) {
+    if (properties[key]) return properties[key]
   }
 
   const device = properties['ro.product.device']
   const model = properties['ro.product.model']
-
-  let marketName = ''
-
   const devices: any[] = androidDeviceList.getDevicesByDeviceId(device)
-  if (!isEmpty(devices)) {
-    const deviceFilter = filter(devices, (device) => device.model === model)
-    if (!isEmpty(deviceFilter)) {
-      marketName = deviceFilter[0].name
-    } else {
-      marketName = devices[0].name
-    }
-  }
+  if (!devices || !devices.length) return ''
 
-  return marketName
+  const exact = devices.find((item) => item.model === model)
+  return exact ? exact.name : devices[0].name
 }
+
+// ---------------------------------------------------------------------------
+// 性能 / 电池 / 运行时长
+// ---------------------------------------------------------------------------
 
 async function getPerformance(deviceId: string) {
   const cpus = await getCpus(deviceId)
@@ -278,73 +277,74 @@ async function getPerformance(deviceId: string) {
     getMemory(deviceId),
     getBattery(deviceId),
   ])
-
   return { cpus, cpuLoads, cpuTemperature, ...memory, ...battery }
 }
 
 async function getUptime(deviceId: string) {
   const result = await shell(deviceId, 'cat /proc/uptime')
-  const [uptime] = result.split(' ')
-  return Math.round(toNum(uptime) * 1000)
+  const [uptime] = String(result).split(' ')
+  return Math.round(Number(uptime) * 1000)
 }
 
 async function getBattery(deviceId: string) {
   const result = await shell(deviceId, 'dumpsys battery')
-
   return {
-    batteryLevel: toNum(getPropValue('level', result)),
-    batteryTemperature: toNum(getPropValue('temperature', result)),
-    batteryVoltage: toNum(getPropValue('voltage', result)),
+    batteryLevel: Number(findProp('level', result)) || 0,
+    batteryTemperature: Number(findProp('temperature', result)) || 0,
+    batteryVoltage: Number(findProp('voltage', result)) || 0,
   }
 }
 
-const screencap: IpcScreencap = async function (deviceId) {
-  const device = await client.getDevice(deviceId)
-  const data = await device.screencap()
-  const buf = await Adb.util.readAll(data)
+// ---------------------------------------------------------------------------
+// 截屏
+// ---------------------------------------------------------------------------
 
+const screencap: IpcScreencap = async (deviceId) => {
+  const device = await client.getDevice(deviceId)
+  const buf = await Adb.util.readAll(await device.screencap())
   return buf.toString('base64')
 }
 
-// 侧栏每 4 秒抓一张：传原始字节给渲染层做 Blob URL，比 base64 少 1/3 体积；
-// 画面和上一帧完全一致时返回 null，渲染层不再解码/重绘（静态桌面最常见）
-const lastFrameHash = new Map<string, string>()
-const screencapRaw: IpcScreencapRaw = async function (deviceId) {
+/**
+ * 侧栏预览：传原始字节给渲染层做 Blob URL，比 base64 少 1/3 体积；
+ * 和上一帧完全一致时返回 null，渲染层不再解码重绘。
+ */
+const screencapRaw: IpcScreencapRaw = async (deviceId) => {
   let device
   try {
     device = await client.getDevice(deviceId)
   } catch {
-    // adb 重启/设备刚移除：预览下一轮再试，不要每秒钟抛一次 IPC 错误
+    // adb 重启/设备刚移除：下一轮再试，不要每秒抛一次 IPC 错误
     return null
   }
-  const data = await device.screencap()
-  const buf = await Adb.util.readAll(data)
+
+  const buf = await Adb.util.readAll(await device.screencap())
   const hash = createHash('md5').update(buf).digest('hex')
-  if (lastFrameHash.get(deviceId) === hash) {
-    return null
-  }
+  if (lastFrameHash.get(deviceId) === hash) return null
   lastFrameHash.set(deviceId, hash)
-  // Buffer 可能来自池化的底层内存：切出精确区间再交给 IPC
+
+  // Buffer 可能来自池化内存：切出精确区间再交给 IPC
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
 }
 
-function parseScreen(wmSize: string, wmDensity: string) {
-  const physicalResolution = getPropValue('Physical size', wmSize)
-  const physicalDensity = getPropValue('Physical density', wmDensity)
+// ---------------------------------------------------------------------------
+// 显示 / 内存 / 存储解析
+// ---------------------------------------------------------------------------
 
-  const hasOverrideResolution = contain(wmSize, 'Override')
-  const hasOverrideDensity = contain(wmDensity, 'Override')
-  const resolution = hasOverrideResolution
-    ? getPropValue('Override size', wmSize)
-    : physicalResolution
-  const density = hasOverrideDensity
-    ? getPropValue('Override density', wmDensity)
-    : physicalDensity
+function parseScreen(wmSize: string, wmDensity: string) {
+  const physicalResolution = findProp('Physical size', wmSize)
+  const physicalDensity = findProp('Physical density', wmDensity)
+  const hasOverrideResolution = wmSize.includes('Override')
+  const hasOverrideDensity = wmDensity.includes('Override')
 
   return {
-    resolution,
+    resolution: hasOverrideResolution
+      ? findProp('Override size', wmSize)
+      : physicalResolution,
     physicalResolution,
-    density,
+    density: hasOverrideDensity
+      ? findProp('Override density', wmDensity)
+      : physicalDensity,
     physicalDensity,
   }
 }
@@ -354,94 +354,72 @@ async function getMemory(deviceId: string) {
 }
 
 function parseMemory(memInfo: string) {
-  let memTotal = 0
-  let memFree = 0
+  const total = findProp('MemTotal', memInfo)
+  const free = findProp('MemAvailable', memInfo) || findProp('MemFree', memInfo)
+  if (!total || !free) return { memTotal: 0, memUsed: 0 }
 
-  const totalMatch = getPropValue('MemTotal', memInfo)
-  let freeMatch = getPropValue('MemAvailable', memInfo)
-  if (!freeMatch) {
-    freeMatch = getPropValue('MemFree', memInfo)
-  }
-  if (totalMatch && freeMatch) {
-    memTotal = parseInt(totalMatch, 10) * 1024
-    memFree = parseInt(freeMatch, 10) * 1024
-  }
-
-  return {
-    memTotal,
-    memUsed: memTotal - memFree,
-  }
+  const memTotal = parseInt(total, 10) * 1024
+  const memFree = parseInt(free, 10) * 1024
+  return { memTotal, memUsed: memTotal - memFree }
 }
 
 function parseStorage(storageInfo: string) {
-  let storageTotal = 0
-  let storageFree = 0
+  const matched = String(storageInfo).match(/Data-Free: (\d+)K \/ (\d+)K/)
+  if (!matched) return { storageTotal: 0, storageUsed: 0 }
 
-  const match = storageInfo.match(new RegExp('Data-Free: (\\d+)K / (\\d+)K'))
-  if (match) {
-    storageFree = parseInt(match[1], 10) * 1024
-    storageTotal = parseInt(match[2], 10) * 1024
-  }
-
-  return {
-    storageTotal,
-    storageUsed: storageTotal - storageFree,
-  }
+  const free = parseInt(matched[1], 10) * 1024
+  const total = parseInt(matched[2], 10) * 1024
+  return { storageTotal: total, storageUsed: total - free }
 }
 
-function getPropValue(key: string, str: string) {
-  const lines = str.split('\n')
-  for (let i = 0, len = lines.length; i < len; i++) {
-    const line = trim(lines[i])
-    if (startWith(line, key)) {
-      return trim(line.replace(/.*:/, ''))
-    }
+/** 取 `Key: value` 行的值；找不到返回空串。 */
+function findProp(key: string, text: string): string {
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim()
+    if (!line.startsWith(key)) continue
+    return line.replace(/.*:/, '').trim()
   }
-
   return ''
 }
 
-const connectDevice: IpcConnectDevice = async function (host, port) {
-  // 端口留空是最常见的用法：adb 默认 5555；也兼容把 ip:port 整串粘进 IP 框
-  const h = String(host || '')
+// ---------------------------------------------------------------------------
+// 连接 / 配对 / 端口扫描
+// ---------------------------------------------------------------------------
+
+function normalizeHost(host: string | undefined): string {
+  return String(host || '')
     .trim()
     .replace(/:\d+$/, '')
-  const p = port || 5555
-  if (!h) throw new Error('设备地址为空')
-  await client.connect(h, p)
 }
 
-const disconnectDevice: IpcDisconnectDevice = async function (host, port) {
-  const h = String(host || '')
-    .trim()
-    .replace(/:\d+$/, '')
-  const p = port || 5555
+const connectDevice: IpcConnectDevice = async (host, port) => {
+  const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
-  await client.disconnect(h, p)
+  await client.connect(h, port || 5555)
 }
 
-// 端口框留空时由这里兜底：先扫 ADB 常用段，扫不到再全端口找
+const disconnectDevice: IpcDisconnectDevice = async (host, port) => {
+  const h = normalizeHost(host)
+  if (!h) throw new Error('设备地址为空')
+  await client.disconnect(h, port || 5555)
+}
+
+/** 当前设备端口扫描的取消令牌（扫描 + adb connect 复核都要能取消）。 */
 let deviceScan: { cancelled: boolean } | null = null
 
-const scanDevicePorts: IpcScanDevicePorts = async function (host, deep) {
-  const h = String(host || '')
-    .trim()
-    .replace(/:\d+$/, '')
+const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
+  const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
-  // scanHostPorts 只覆盖端口探测阶段；扫描完成后的 adb connect 复核还要能被取消，
-  // 否则用户点取消后最坏要再等 3×2.5 秒
+
   const token = { cancelled: false }
   deviceScan = token
 
-  // 已经连过的设备 adb 自己记着端口，直接用它——有些定制 adbd 会拒绝新的裸 CNXN 握手，
-  // 硬扫反而判不出来
+  // adb 已经记住的在线端口直接复用：有些定制 adbd 会拒绝裸 CNXN 握手
   try {
-    const devices = await client.listDevices()
     const known: number[] = []
-    for (const device of devices) {
+    for (const device of await client.listDevices()) {
       const matched = String(device.id || '').match(/^(.+):(\d+)$/)
-      // 只复用真正在线的连接：offline 的残留条目（上次 connect 失败的端口）
-      // 会让「扫描本机 IP」秒回几组假 ADB 端口
+      // 只复用真正在线的连接：offline 残留会让「扫本机 IP」秒回假端口
       if (matched && matched[1] === h && device.type === 'device') {
         known.push(Number(matched[2]))
       }
@@ -468,30 +446,33 @@ const scanDevicePorts: IpcScanDevicePorts = async function (host, deep) {
       window.sendTo('main', 'portScanProgress', progress),
   })
 
-  // 裸 CNXN 握手只是快速判据：有些定制 adbd（或经端口转发/隧道）会直接关连接，
-  // 端口明明开着却判不出 ADB，用户就看到「扫到 5555 却连不上」。
-  // 这里用 adb connect 再确认一遍——它走完整协商，成功且状态为 device 才算数。
+  // 裸握手判不出 ADB 的定制 adbd：用完整 adb connect 再确认一遍
   if (
     !result.cancelled &&
     !token.cancelled &&
     !result.adbPorts.length &&
     result.openPorts.length
   ) {
-    const quick = result.openPorts.filter(
+    const preferred = result.openPorts.filter(
       (p) => (p >= 5550 && p <= 5600) || (p >= 7500 && p <= 7600)
     )
-    const candidates = (quick.length ? quick : result.openPorts).slice(0, 3)
+    const candidates = (preferred.length ? preferred : result.openPorts).slice(
+      0,
+      3
+    )
     for (const port of candidates) {
       if (result.cancelled || token.cancelled) break
       try {
-        // adb connect 对不可达端口可能卡十几秒：扫描复核最多等 2.5 秒
+        // adb connect 对不可达端口可能卡十几秒：复核最多等 2.5 秒
         await Promise.race([
           client.connect(h, port).catch(() => undefined),
           sleep(2500),
         ])
         await sleep(200)
         const devices = await client.listDevices()
-        if (devices.some((d) => d.id === `${h}:${port}` && d.type === 'device')) {
+        if (
+          devices.some((d) => d.id === `${h}:${port}` && d.type === 'device')
+        ) {
           logger.info('adb connect fallback ok', h, port)
           result.adbPorts = [port]
           break
@@ -506,45 +487,47 @@ const scanDevicePorts: IpcScanDevicePorts = async function (host, deep) {
   return result
 }
 
-const cancelDevicePortScan: IpcCancelPortScan = async function () {
+const cancelDevicePortScan: IpcCancelPortScan = async () => {
   if (deviceScan) deviceScan.cancelled = true
   cancelPortScan()
 }
 
-const pairDevice: IpcPairDevice = async function (host, port, password) {
+const pairDevice: IpcPairDevice = async (host, port, password) => {
   const { stdout } = await spawnAdb(['pair', `${host}:${port}`, password])
-  if (!contain(stdout, 'Successfully')) {
+  if (!String(stdout).includes('Successfully')) {
     throw new Error(`Pair device failed: ${stdout}`)
   }
 }
 
-const inputKey: IpcInputKey = async function (deviceId, keyCode) {
+// ---------------------------------------------------------------------------
+// 按键 / 终端 / root / 无线
+// ---------------------------------------------------------------------------
+
+const inputKey: IpcInputKey = async (deviceId, keyCode) => {
   await base.shell(deviceId, `input keyevent ${keyCode}`)
 }
 
 async function openAdbCli() {
   let cwd = resolveResources('adb')
-  const adbPath = settingsStore.get('adbPath')
-  if (!isStrBlank(adbPath) && fs.existsSync(adbPath)) {
-    cwd = path.dirname(adbPath)
-  } else if (isWindows) {
-    // Microsoft store app permission issue workaround
+  const custom = settingsStore.get('adbPath')
+  if (custom && custom.trim() !== '' && fs.existsSync(custom)) {
+    cwd = path.dirname(custom)
+  } else if (process.platform === 'win32') {
+    // Windows 商店版权限问题：把 adb 目录复制到 userData 再开
     const newCwd = getUserDataPath('adb')
-    if (!(await fs.existsSync(newCwd))) {
+    if (!fs.existsSync(newCwd)) {
       await fs.copy(cwd, newCwd)
     }
     cwd = newCwd
   }
 
-  if (isMac) {
+  if (process.platform === 'darwin') {
     const child = childProcess.spawn('open', ['-a', 'Terminal', cwd], {
       stdio: 'ignore',
     })
     child.unref()
-  } else if (isWindows) {
-    const child = childProcess.exec('start cmd', {
-      cwd,
-    })
+  } else if (process.platform === 'win32') {
+    const child = childProcess.exec('start cmd', { cwd })
     child.unref()
   } else {
     const child = childProcess.spawn('x-terminal-emulator', ['-w', cwd], {
@@ -556,9 +539,7 @@ async function openAdbCli() {
 
 async function root(deviceId: string) {
   const id = await shell(deviceId, 'id')
-  if (contain(id, 'uid=0')) {
-    return
-  }
+  if (String(id).includes('uid=0')) return
   const device = await client.getDevice(deviceId)
   await device.root()
 }
@@ -572,12 +553,11 @@ async function startWireless(deviceId: string) {
 }
 
 async function restartAdbServer() {
-  // 重启前记下无线设备：adb kill-server 会把这些连接全部断掉，
-  // USB 设备能自己回来，无线设备不会——不重连的话用户点一次「重启」就丢一片设备
+  // kill-server 会把无线设备全部断开，USB 会自己回来，无线不会：
+  // 先记下来，重启后逐台重连
   const wireless: Array<{ host: string; port: number }> = []
   try {
-    const devices = await client.listDevices()
-    for (const device of devices) {
+    for (const device of await client.listDevices()) {
       const matched = String(device.id || '').match(/^(.+):(\d+)$/)
       if (matched) {
         wireless.push({ host: matched[1], port: Number(matched[2]) })
@@ -587,15 +567,15 @@ async function restartAdbServer() {
     logger.warn('listDevices before restart failed', e && e.message)
   }
 
-  // adb server 重启后设备重新连接：属性缓存、预热标记、上一帧哈希都该失效，
-  // 否则设备服务不会重新预热、侧栏预览会误判为「画面没变」
+  // 重启后属性/预热/预览帧全部失效，必须清
   deviceInfoCache.clear()
   prewarmed.clear()
   lastFrameHash.clear()
+
   await client.kill()
   await client.version()
   await sleep(800)
-  // 逐台重连，单台失败不影响其它设备；adb server 刚起来时第一次可能还没就绪，失败重试一次
+
   const reconnect = async ({ host, port }: { host: string; port: number }) => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -603,7 +583,12 @@ async function restartAdbServer() {
         return
       } catch (e: any) {
         if (attempt === 1) {
-          logger.warn('reconnect after restart failed', host, port, e && e.message)
+          logger.warn(
+            'reconnect after restart failed',
+            host,
+            port,
+            e && e.message
+          )
         } else {
           await sleep(1000)
         }
@@ -613,72 +598,86 @@ async function restartAdbServer() {
   await Promise.all(wireless.map(reconnect))
 }
 
+// ---------------------------------------------------------------------------
+// 初始化：设备跟踪 + IPC 注册
+// ---------------------------------------------------------------------------
+
 export async function init() {
   logger.info('init')
 
   app.on('will-quit', () => {
-    if (settingsStore.get('killAdbWhenExit')) {
-      logger.info('kill adb')
-      // will-quit 不会 await 异步回调：必须同步杀，否则进程先退出、adb server 留下
-      try {
-        childProcess.spawnSync(getAdbPath(), ['kill-server'], {
-          windowsHide: true,
-          timeout: 5000,
-        })
-      } catch (e) {
-        logger.error('kill adb failed', e)
-      }
+    if (!settingsStore.get('killAdbWhenExit')) return
+    logger.info('kill adb')
+    // will-quit 不会 await：必须同步杀，否则进程先退出、adb server 留下
+    try {
+      childProcess.spawnSync(getAdbPath(), ['kill-server'], {
+        windowsHide: true,
+        timeout: 5000,
+      })
+    } catch (e) {
+      logger.error('kill adb failed', e)
     }
   })
 
-  client = Adb.createClient({
-    bin: getAdbPath(),
-  })
-  async function track() {
-    logger.info('track devices')
-    try {
-      const tracker = await client.trackDevices()
-      tracker.on('add', onDeviceChange)
-      tracker.on('remove', (device: Device) => {
-        onDeviceRemoved(device.id)
-      })
-      tracker.on('error', () => {
-        logger.error('tracker error')
-      })
-      tracker.on('end', async () => {
-        logger.info('tracker end')
-        await sleep(2000)
-        track()
-      })
-    } catch (e) {
-      logger.error('track error', e)
-      // restartAdbServer / 设备拔出时 trackDevices 会直接 reject，
-      // 原来只记日志：从此再也收不到设备增删事件，列表只能重启应用才更新
-      setTimeout(() => track(), 3000)
-    }
-  }
-  // 批量上线/一次 adb 重启会连续收到多个 add：每次都排一次 refresh 会让
-  // 设备列表在 2 秒内刷新十几遍，每遍还要重新拉所有设备的属性
+  client = Adb.createClient({ bin: getAdbPath() })
+
+  // 批量上线/adb 重启会连续收到多个 add：2 秒防抖，只刷新一次
   let changeTimer: ReturnType<typeof setTimeout> | null = null
-  function onDeviceChange() {
-    logger.info('device change')
+  function scheduleRefresh() {
     if (changeTimer) clearTimeout(changeTimer)
     changeTimer = setTimeout(() => {
       changeTimer = null
       window.sendAll('changeDevice')
     }, 2000)
   }
+
+  function onDeviceAdded() {
+    logger.info('device change')
+    scheduleRefresh()
+  }
+
   function onDeviceRemoved(deviceId: string) {
     logger.info('device removed', deviceId)
-    // 设备真的走了：收掉投屏会话、清掉按设备缓存的 socket/端口/属性/预览帧
     webCast.stopWebCast(deviceId).catch(() => {})
     base.deleteDeviceStore(deviceId)
     server.clearPackageCaches(deviceId)
     prewarmed.delete(deviceId)
     deviceInfoCache.delete(deviceId)
     lastFrameHash.delete(deviceId)
-    onDeviceChange()
+    scheduleRefresh()
   }
+
+  // tracker 断开后要重建：原实现 end 和 error 各起一个定时器，
+  // 两边同时触发会挂出两个 tracker，这里收敛成单一重连入口
+  let trackerRetry: ReturnType<typeof setTimeout> | null = null
+  function scheduleTracker(delay: number) {
+    if (trackerRetry) return
+    trackerRetry = setTimeout(() => {
+      trackerRetry = null
+      track()
+    }, delay)
+  }
+
+  async function track() {
+    logger.info('track devices')
+    try {
+      const tracker = await client.trackDevices()
+      tracker.on('add', onDeviceAdded)
+      tracker.on('remove', (device: Device) => onDeviceRemoved(device.id))
+      tracker.on('error', () => {
+        logger.error('tracker error')
+        scheduleTracker(3000)
+      })
+      tracker.on('end', () => {
+        logger.info('tracker end')
+        scheduleTracker(2000)
+      })
+    } catch (e) {
+      logger.error('track error', e)
+      scheduleTracker(3000)
+    }
+  }
+
   track()
 
   base.init(client)
