@@ -1,4 +1,4 @@
-package io.liriliri.aya
+package com.devicedock.server
 
 import android.annotation.TargetApi
 import android.content.pm.ApplicationInfo
@@ -18,9 +18,9 @@ import java.io.File
 
 class Connection(private val client: LocalSocket) : Thread() {
     private companion object {
-        private const val TAG = "Aya.Connection"
+        private const val TAG = "DeviceDock.Connection"
         private var packageCache = JSONObject()
-        private const val ICON_CACHE_DIR = "/data/local/tmp/aya/icons"
+        private const val ICON_CACHE_DIR = "/data/local/tmp/devicedock/icons"
 
         init {
             val iconCacheDir = File(ICON_CACHE_DIR)

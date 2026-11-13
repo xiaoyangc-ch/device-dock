@@ -49,7 +49,7 @@ export const showWebCast: IpcShowWebCast = async function (deviceId, name) {
   show(deviceId, name)
 }
 
-// 按设备分辨率调整窗口，避免竖窗口里给横屏留大黑边（AYA 同样按画面比例定窗口）
+// 按设备分辨率调整窗口，避免竖窗口里给横屏留大黑边（按画面比例定窗口）
 const lastSize = new Map<string, string>()
 
 export const resizeWebCast: IpcResizeWebCast = async function (

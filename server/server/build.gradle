@@ -10,7 +10,7 @@ dependencies {
 }
 
 android {
-    namespace 'io.liriliri.aya'
+    namespace 'com.devicedock.server'
 
     compileSdk = 34
 
@@ -43,7 +43,7 @@ android {
 
 android.applicationVariants.all { variant ->
     variant.outputs.all {
-        outputFileName = "aya-server-v${versionName}.apk"
+        outputFileName = "devicedock-server-v${versionName}.apk"
 
         def dexPath = rootProject.rootDir.path
         variant.assembleProvider.get().doLast {
@@ -53,7 +53,7 @@ android.applicationVariants.all { variant ->
                 from file
                 into dexPath
                 rename { String fileName ->
-                    fileName.replace(file.getName(), "aya.dex")
+                    fileName.replace(file.getName(), "devicedock.dex")
                 }
             }
         }

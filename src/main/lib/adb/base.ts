@@ -135,7 +135,7 @@ export async function shell(
 
   const device = await client.getDevice(deviceId)
 
-  const socket = await device.shell(cmds.join('\necho "aya_separator"\n'))
+  const socket = await device.shell(cmds.join('\necho "devicedock_separator"\n'))
   // 设备半死不活时 readAll 会永远等不到 end：用 race 保证 shell() 一定会在超时后 reject
   let timer: any = null
   let output: string
@@ -164,7 +164,7 @@ export async function shell(
     return trim(output)
   }
 
-  return map(output.split('aya_separator'), (val) => trim(val))
+  return map(output.split('devicedock_separator'), (val) => trim(val))
 }
 
 // shell() 只拿得到 stdout、没有退出码：rm / pm disable / settings put 失败时会被当成成功。
@@ -174,7 +174,7 @@ export async function shellChecked(
   command: string,
   timeoutMs = 15000
 ): Promise<string> {
-  const marker = '__aya_exit'
+  const marker = '__devicedock_exit'
   const output = await shell(
     deviceId,
     `${command}; echo "${marker}:$?"`,
@@ -183,7 +183,7 @@ export async function shellChecked(
   const lines = output.split('\n')
   let code = 0
   for (let i = lines.length - 1; i >= 0; i--) {
-    const matched = lines[i].match(/^\s*__aya_exit:(\d+)\s*$/)
+    const matched = lines[i].match(/^\s*__devicedock_exit:(\d+)\s*$/)
     if (matched) {
       code = toNum(matched[1])
       lines.splice(i, 1)
@@ -246,13 +246,13 @@ export function setDeviceStore(deviceId: string, key: string, value: any) {
   deviceStore[deviceId][key] = value
 }
 
-// 设备拔掉/隧道断开时回收：ayaClient 里握着一条 socket 和 pending 请求，
+// 设备拔掉/隧道断开时回收：deviceClient 里握着一条 socket 和 pending 请求，
 // 不清理的话反复插拔设备会一直攒着（旧 forward 端口、死 socket 也会被复用）
 export function deleteDeviceStore(deviceId: string) {
   const entry = deviceStore[deviceId]
-  if (entry && entry.ayaClient && typeof entry.ayaClient.dispose === 'function') {
+  if (entry && entry.deviceClient && typeof entry.deviceClient.dispose === 'function') {
     try {
-      entry.ayaClient.dispose()
+      entry.deviceClient.dispose()
     } catch {
       // ignore
     }

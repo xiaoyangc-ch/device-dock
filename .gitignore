@@ -6,3 +6,10 @@ tmp_*
 *_out.txt
 *_check.txt
 .test-build/
+
+# Android server（dex）构建产物与本地 SDK 配置
+server/.gradle/
+server/local.properties
+server/build/
+server/server/build/
+server/*.dex

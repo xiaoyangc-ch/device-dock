@@ -22,7 +22,7 @@ let client: Client
 // 每次刷新（按 50 个包分批）都会要 diskstats：缓存 10 秒，避免一屏应用跑十几次 dumpsys
 const diskStatsCache = new Map<string, { ts: number; stats: any }>()
 
-class AyaClient {
+class DeviceClient {
   private deviceId = ''
   private socket: any = null
   private buf: Buffer = Buffer.alloc(0)
@@ -56,13 +56,13 @@ class AyaClient {
   ): Promise<any> {
     await this.ensureConnected()
     if (!this.socket) {
-      throw new Error('aya server 未连接：' + this.deviceId)
+      throw new Error('设备服务未连接：' + this.deviceId)
     }
 
     const id = uuid()
 
     this.socket.write(
-      wire.io.liriliri.aya.Request.encodeDelimited({
+      wire.com.devicedock.server.Request.encodeDelimited({
         id,
         method,
         params: JSON.stringify(params),
@@ -73,7 +73,7 @@ class AyaClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.resolves.delete(id)
-        reject(new Error('aya server 响应超时: ' + method))
+        reject(new Error('设备服务响应超时: ' + method))
       }, 10000)
       this.resolves.set(id, { resolve, reject, timer })
     })
@@ -116,7 +116,7 @@ class AyaClient {
       const body = this.buf.subarray(pos, pos + len)
       this.buf = this.buf.subarray(pos + len)
       try {
-        this.handleFrame(wire.io.liriliri.aya.Response.decode(body))
+        this.handleFrame(wire.com.devicedock.server.Response.decode(body))
       } catch (e) {
         logger.error('decode response failed', e)
       }
@@ -143,7 +143,7 @@ class AyaClient {
     logger.info('connect')
     try {
       const device = client.getDevice(this.deviceId)
-      const socket = await device.openLocal('localabstract:aya')
+      const socket = await device.openLocal('localabstract:devicedock')
       // 先登记再绑事件：下面所有回调都用 this.socket === socket 判断自己是否已被顶替
       this.socket = socket
       socket.on('readable', () => {
@@ -154,18 +154,18 @@ class AyaClient {
         }
       })
       socket.on('error', (e: any) => {
-        logger.error('aya socket error', e)
+        logger.error('设备服务连接错误', e)
         if (this.socket === socket) {
           this.socket = null
           this.buf = Buffer.alloc(0)
-          this.failAllPending(e || new Error('aya socket error'))
+          this.failAllPending(e || new Error('设备服务连接错误'))
         }
       })
       socket.on('end', () => {
         if (this.socket === socket) {
           this.socket = null
           this.buf = Buffer.alloc(0)
-          this.failAllPending(new Error('aya socket closed'))
+          this.failAllPending(new Error('设备服务连接已关闭'))
         }
       })
       this.socket = socket
@@ -177,7 +177,7 @@ class AyaClient {
           await waitUntil(this.isRunning, 10000, 100)
           await this.connect(false)
         } catch (err) {
-          logger.error('aya server start failed', err)
+          logger.error('device server start failed', err)
         }
       }
       // 不吞异常：调用方需要知道是「设备掉了 / dex 没推上去」，
@@ -187,24 +187,24 @@ class AyaClient {
   }
   private isRunning = singleton(async () => {
     const result: string = await shell(this.deviceId, `cat /proc/net/unix`)
-    return contain(result, '@aya')
+    return contain(result, '@devicedock')
   })
   private async push() {
     logger.info('push')
-    // adb push 不会自动建父目录：/data/local/tmp/aya 不存在时 dex 推不上去，
+    // adb push 不会自动建父目录：/data/local/tmp/devicedock 不存在时 dex 推不上去，
     // 应用名/图标全走 dex，界面就是空列表（老设备第一次用最容易踩到）
-    await shell(this.deviceId, 'mkdir -p /data/local/tmp/aya')
+    await shell(this.deviceId, 'mkdir -p /data/local/tmp/devicedock')
     const device = client.getDevice(this.deviceId)
     await device.push(
-      resolveResources('aya.dex'),
-      '/data/local/tmp/aya/aya.dex'
+      resolveResources('devicedock.dex'),
+      '/data/local/tmp/devicedock/devicedock.dex'
     )
   }
   private async start() {
     logger.info('start')
     const device = client.getDevice(this.deviceId)
     const stream: any = await device.shell(
-      'CLASSPATH=/data/local/tmp/aya/aya.dex app_process /system/bin io.liriliri.aya.Server'
+      'CLASSPATH=/data/local/tmp/devicedock/devicedock.dex app_process /system/bin com.devicedock.server.Server'
     )
     // 这条连接用来拉起 server，之后不再需要：挂上空 error 监听并消费数据，
     // 避免 adbkit 的 stream 报未处理 error 把主进程带走
@@ -213,13 +213,13 @@ class AyaClient {
   }
 }
 
-async function getAyaClient(deviceId: string): Promise<AyaClient> {
-  let ayaClient = getDeviceStore(deviceId, 'ayaClient')
-  if (!ayaClient) {
-    ayaClient = new AyaClient(deviceId)
-    setDeviceStore(deviceId, 'ayaClient', ayaClient)
+async function getDeviceClient(deviceId: string): Promise<DeviceClient> {
+  let deviceClient = getDeviceStore(deviceId, 'deviceClient')
+  if (!deviceClient) {
+    deviceClient = new DeviceClient(deviceId)
+    setDeviceStore(deviceId, 'deviceClient', deviceClient)
   }
-  return ayaClient
+  return deviceClient
 }
 
 // 应用名/图标只跟「包 + versionCode」有关：缓存后二次打开应用页只需要 pm list，
@@ -231,7 +231,7 @@ const verCache = new Map<string, { ts: number; map: Map<string, string> | null }
 // 用户点开「应用」时不用再等这一步
 export async function prewarm(deviceId: string) {
   try {
-    const client = await getAyaClient(deviceId)
+    const client = await getDeviceClient(deviceId)
     await client.warm()
   } catch (e) {
     logger.debug('prewarm failed', e)
@@ -306,7 +306,7 @@ const getPackageInfos: IpcGetPackageInfos = async function (
   }
 
   if (misses.length) {
-    const client = await getAyaClient(deviceId)
+    const client = await getDeviceClient(deviceId)
     const { packageInfos } = await client.sendMessage('getPackageInfos', {
       packageNames: misses,
     })
@@ -401,7 +401,7 @@ const getPackageDiskStats = async function (deviceId: string) {
 }
 
 const getFileServerPort = singleton(async function (deviceId): Promise<number> {
-  const client = await getAyaClient(deviceId)
+  const client = await getDeviceClient(deviceId)
   let port = getDeviceStore(deviceId, 'fileServerPort')
   if (port) {
     const { running } = await client.sendMessage('isFileServerRunning')

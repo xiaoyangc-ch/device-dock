@@ -434,9 +434,9 @@ function lsFollowsSymlink(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `ls -laL / >/dev/null 2>&1 && echo aya_ls_follow || echo aya_ls_plain`
+      `ls -laL / >/dev/null 2>&1 && echo devicedock_ls_follow || echo devicedock_ls_plain`
     )
-      .then((out) => contain(out, 'aya_ls_follow'))
+      .then((out) => contain(out, 'devicedock_ls_follow'))
       .catch(() => false)
     lsFollowCache.set(deviceId, probe)
   }
@@ -537,9 +537,9 @@ function supportsRecursiveFind(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `find . -maxdepth 0 -iname aya >/dev/null 2>&1 && echo aya_find_ok || echo aya_find_no`
+      `find . -maxdepth 0 -iname aya >/dev/null 2>&1 && echo devicedock_find_ok || echo devicedock_find_no`
     )
-      .then((out) => contain(out, 'aya_find_ok'))
+      .then((out) => contain(out, 'devicedock_find_ok'))
       .catch(() => false)
     findCache.set(deviceId, probe)
   }
@@ -889,9 +889,9 @@ function supportsFindFollow(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      'find -L / -maxdepth 0 >/dev/null 2>&1 && echo aya_follow_ok || echo aya_follow_no'
+      'find -L / -maxdepth 0 >/dev/null 2>&1 && echo devicedock_follow_ok || echo devicedock_follow_no'
     )
-      .then((out) => contain(out, 'aya_follow_ok'))
+      .then((out) => contain(out, 'devicedock_follow_ok'))
       .catch(() => false)
     findFollowCache.set(deviceId, probe)
   }

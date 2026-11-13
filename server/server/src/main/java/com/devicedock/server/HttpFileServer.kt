@@ -1,4 +1,4 @@
-package io.liriliri.aya
+package com.devicedock.server
 
 import android.util.Log
 import fi.iki.elonen.NanoHTTPD

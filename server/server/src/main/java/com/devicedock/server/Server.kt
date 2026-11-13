@@ -1,4 +1,4 @@
-package io.liriliri.aya
+package com.devicedock.server
 
 import android.net.LocalServerSocket
 import android.util.Log
@@ -6,7 +6,7 @@ import java.util.concurrent.Executors
 
 class Server {
     companion object {
-        private const val TAG = "Aya.Server"
+        private const val TAG = "DeviceDock.Server"
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -22,7 +22,7 @@ class Server {
     fun start(args: Array<String>) {
         Log.i(TAG, "Start server")
 
-        val server = LocalServerSocket("aya")
+        val server = LocalServerSocket("devicedock")
         Log.i(TAG, "Server started, listening on ${server.localSocketAddress}")
 
         while (true) {

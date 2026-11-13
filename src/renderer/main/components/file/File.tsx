@@ -85,7 +85,7 @@ export default observer(function File() {
   const dirCache = useRef(
     new Map<string, { files: IFile[]; total: number; ts: number }>()
   ).current
-  // 路径编辑：双击面包屑进入，回车跳转、Esc 取消；替换原来 AYA 的 LunaPathBar
+  // 路径编辑：双击面包屑进入，回车跳转、Esc 取消；替换原来的 LunaPathBar
   const [editingPath, setEditingPath] = useState(false)
   const [pathDraft, setPathDraft] = useState('')
   const pathInputRef = useRef<HTMLInputElement>(null)

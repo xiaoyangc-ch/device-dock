@@ -14,7 +14,7 @@ const logger = log('webCast')
 const procs = new Map<string, childProcess.ChildProcess>()
 const forwardPorts = new Map<string, number>()
 
-const JAR_DIR = '/data/local/tmp/aya'
+const JAR_DIR = '/data/local/tmp/devicedock'
 const SERVER_VERSION = '3.1'
 // 只清理本程序推上去的 server，避免误杀用户自己开的 scrcpy
 const KILL_CMD = `pkill -f ${JAR_DIR}/scrcpy-`

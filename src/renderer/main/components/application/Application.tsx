@@ -46,7 +46,7 @@ function iconEntry(info: IPackageInfo) {
   }
 }
 
-// aya.dex 起不来时（老 ART、目录缺失等）至少把包名和默认图标列出来，
+// devicedock.dex 起不来时（老 ART、目录缺失等）至少把包名和默认图标列出来，
 // 别让整页空白；名称/版本点进详情再补
 function placeholderInfo(packageName: string, system: boolean): IPackageInfo {
   return {

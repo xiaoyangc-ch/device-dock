@@ -588,7 +588,7 @@ async function restartAdbServer() {
   }
 
   // adb server 重启后设备重新连接：属性缓存、预热标记、上一帧哈希都该失效，
-  // 否则 aya server 不会重新预热、侧栏预览会误判为「画面没变」
+  // 否则设备服务不会重新预热、侧栏预览会误判为「画面没变」
   deviceInfoCache.clear()
   prewarmed.clear()
   lastFrameHash.clear()
