@@ -5,9 +5,10 @@ export class Application {
   itemSize = 48
   sysPackage = true
   listView = false
-  // 3.0 一次性迁移：默认用列表视图，旧的图标网格不再作为首屏
+  // 一次性迁移标记：老版本用户默认是图标网格，3.0 改成列表视图
   listViewSynced = false
   dataGridColumns: any[] = []
+
   constructor() {
     makeObservable(this, {
       itemSize: observable,
@@ -17,12 +18,14 @@ export class Application {
 
     this.init()
   }
+
   async init() {
-    const application = await main.getMainStore('application')
-    if (application) {
-      runInAction(() => extend(this, application))
+    const saved = await main.getMainStore('application')
+    if (saved) {
+      runInAction(() => extend(this, saved))
     }
-    if (!application || !application.listViewSynced) {
+
+    if (!saved || !saved.listViewSynced) {
       runInAction(() => {
         this.listView = true
         this.listViewSynced = true
@@ -30,9 +33,10 @@ export class Application {
       await this.set('listView', true)
     }
   }
-  async set(key: string, val: any) {
+
+  async set(key: string, value: any) {
     runInAction(() => {
-      this[key] = val
+      this[key] = value
     })
     await main.setMainStore('application', {
       itemSize: this.itemSize,

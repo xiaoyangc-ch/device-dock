@@ -1,3 +1,7 @@
+/**
+ * 渲染入口：按 ?page= 决定加载哪个窗口的 App。
+ * 主窗口之外还有终端/进程/投屏/关于/视频五个独立窗口，共用这一份 bundle。
+ */
 import { lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import { t, i18n } from 'common/util'
@@ -39,7 +43,7 @@ logger.info('start')
 function renderApp() {
   logger.info('render app')
 
-  const container: HTMLElement = document.getElementById('app') as HTMLElement
+  const container = document.getElementById('app') as HTMLElement
 
   let App = lazy(() => import('./main/App.js') as Promise<any>)
   let title = '设备坞'
@@ -67,7 +71,6 @@ function renderApp() {
   }
 
   preload.setTitle(title)
-
   createRoot(container).render(<App />)
 }
 
@@ -75,6 +78,7 @@ function renderApp() {
   const language = await main.getLanguage()
   i18n.locale(language)
 
+  // luna 组件自带 i18n，只认 en-US 一个 locale：把当前语言的文案灌进去
   LunaModal.i18n.locale('en-US')
   LunaModal.i18n.set('en-US', {
     ok: t('ok'),

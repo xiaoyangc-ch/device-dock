@@ -3,6 +3,7 @@ import extend from 'licia/extend'
 
 export class Process {
   onlyPackage = false
+
   constructor() {
     makeObservable(this, {
       onlyPackage: observable,
@@ -10,15 +11,17 @@ export class Process {
 
     this.init()
   }
+
   async init() {
-    const process = await main.getMainStore('process')
-    if (process) {
-      runInAction(() => extend(this, process))
+    const saved = await main.getMainStore('process')
+    if (saved) {
+      runInAction(() => extend(this, saved))
     }
   }
-  async set(key: string, val: any) {
+
+  async set(key: string, value: any) {
     runInAction(() => {
-      this[key] = val
+      this[key] = value
     })
     await main.setMainStore('process', {
       onlyPackage: this.onlyPackage,

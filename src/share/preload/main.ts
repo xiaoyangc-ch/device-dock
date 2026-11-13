@@ -72,6 +72,8 @@ export default {
   on: (event: string, cb: types.AnyFn) => {
     const listener = (_e: any, ...args: any[]) => cb(...args)
     ipcRenderer.on(event, listener)
-    return () => ipcRenderer.off(event, listener)
+    return () => {
+      ipcRenderer.off(event, listener)
+    }
   },
 }

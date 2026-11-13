@@ -19,6 +19,7 @@ import { t } from 'common/util'
 
 export default observer(function App() {
   useEffect(() => {
+    // 全屏时原生标题栏隐藏，内容要顶到顶部（body class 由样式表接管）
     const off = main.on('fullScreenChange', (fullScreen: boolean) => {
       document.body.classList.toggle(
         'native-titlebar-fullscreen',
@@ -37,8 +38,10 @@ export default observer(function App() {
         {store.ready ? (
           <>
             {store.panel !== 'file' && <PageHead />}
-            {/* 切设备时整棵面板树重建：文件页回根目录、终端/日志重开会话，
-                各页面不必各自处理「设备已换」；代价是切换时有一次重挂载 */}
+            {/*
+              切设备时整棵面板树重建：文件页回根目录、终端/日志重开会话，
+              各页面不必自己处理「设备已换」；代价是切换时重挂载一次。
+            */}
             <div
               className={Style.panels}
               key={store.device ? store.device.id : ''}
@@ -107,31 +110,30 @@ interface IPanelProps {
   panel: string
 }
 
+/**
+ * 懒挂载面板：第一次切到才渲染，之后只用 visibility 隐藏。
+ * 全部常驻会同时跑 10 个页面的轮询；每次卸载重挂则丢状态（文件列表、终端会话）。
+ */
 const Panel: FC<PropsWithChildren<IPanelProps>> = observer(function Panel(
   props
 ) {
-  const [used, setUsed] = useState(false)
+  const [mounted, setMounted] = useState(false)
 
-  let visible = false
+  const visible = store.panel === props.panel
+  if (visible && !mounted) setMounted(true)
 
-  if (store.panel === props.panel) {
-    if (!used) {
-      setUsed(true)
-    }
-    visible = true
-  }
-
-  const style: React.CSSProperties = {}
-  if (!visible) {
-    style.opacity = 0
-    style.pointerEvents = 'none'
-    // 只设 opacity 的话，隐藏面板里的按钮仍能被 Tab 键聚焦（焦点跑进看不见的界面）
-    style.visibility = 'hidden'
-  }
+  const style: React.CSSProperties = visible
+    ? {}
+    : {
+        opacity: 0,
+        pointerEvents: 'none',
+        // 只设 opacity 的话隐藏面板里的按钮仍能被 Tab 聚焦
+        visibility: 'hidden',
+      }
 
   return (
     <div className={Style.panel} style={style}>
-      {used ? props.children : null}
+      {mounted ? props.children : null}
     </div>
   )
 })

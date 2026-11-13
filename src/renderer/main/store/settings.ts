@@ -1,14 +1,24 @@
 import { action, makeObservable, observable, runInAction } from 'mobx'
 import isUndef from 'licia/isUndef'
 
+const NAMES = [
+  'language',
+  'theme',
+  'adbPath',
+  'killAdbWhenExit',
+  'useNativeTitlebar',
+  'sidebarCollapsed',
+]
+
 export class Settings {
   language = 'en-US'
   theme = 'light'
   adbPath = ''
   killAdbWhenExit = false
   useNativeTitlebar = false
-  // 3.0 侧栏可折叠：316px → 84px，文件表格在 1024 窗口下能多出 232px
+  // 侧栏可折叠：316px → 84px，1024 窗口下文件表格能多出 232px
   sidebarCollapsed = false
+
   constructor() {
     makeObservable(this, {
       language: observable,
@@ -22,27 +32,22 @@ export class Settings {
 
     this.init()
   }
+
   async init() {
-    const names = [
-      'language',
-      'theme',
-      'adbPath',
-      'killAdbWhenExit',
-      'useNativeTitlebar',
-      'sidebarCollapsed',
-    ]
-    for (let i = 0, len = names.length; i < len; i++) {
-      const name = names[i]
-      const val = await main.getSettingsStore(name)
-      if (!isUndef(val)) {
-        runInAction(() => (this[name] = val))
+    for (const name of NAMES) {
+      const value = await main.getSettingsStore(name)
+      if (!isUndef(value)) {
+        runInAction(() => {
+          this[name] = value
+        })
       }
     }
   }
-  async set(name: string, val: any) {
+
+  async set(name: string, value: any) {
     runInAction(() => {
-      this[name] = val
+      this[name] = value
     })
-    await main.setSettingsStore(name, val)
+    await main.setSettingsStore(name, value)
   }
 }
