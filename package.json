@@ -29,7 +29,7 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "gen:icon": "node script/gen-icons.mjs",
     "gen:theme": "lsla genTheme --input src/common/theme.json --output src/renderer/theme.scss && lsla genTheme --input src/common/theme.json --output src/common/theme.ts",
-    "gen:pb": "pbjs -t static-module -w es6 -o src/main/lib/wire.js server/server/src/main/proto/Wire.proto && pbts -o src/main/lib/wire.d.ts src/main/lib/wire.js"
+    "gen:pb": "pbjs -t static-module -w es6 -o src/main/lib/wire.js server/server/src/main/proto/wire.proto && pbts -o src/main/lib/wire.d.ts src/main/lib/wire.js"
   },
   "keywords": [
     "adb",
