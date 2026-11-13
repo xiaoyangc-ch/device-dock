@@ -8,6 +8,10 @@
 - 设备连接页只剩 USB / 局域网：「APM 远程」入口与相关表单一并移除
 - 排障环境变量 `APM_NO_PREWARM` 改为 `DEVICEDOCK_NO_PREWARM`；投屏配置键 `apmCast` 改为 `deviceCast`
 - 图标、关于页、NOTICE、README 换成新品牌
+- 代码层自有化：`src/main`（约 7k 行）、`src/share`（2.6k 行）、`src/renderer`（8.4k 行）全部重写为自有实现；`server/` 的 Kotlin 日志 tag 去掉上游标识并重编 dex
+- 修复全盘搜索的存储视图重复：`/sdcard`、`/mnt/pass_through`、`/mnt/androidwritable`、`/mnt/installer`、`/mnt/user` 是同一份存储的运行时视图，整根 `find -L` 会让同一个文件出现 7 条，改为容器根只取真实子目录 + 按名字排除视图
+- 全盘搜索二次查询走内存索引，实测 1.1 秒建索引、2ms 命中
+
 
 ## 3.0.8（2026-11-13）
 应用页真实图标。
