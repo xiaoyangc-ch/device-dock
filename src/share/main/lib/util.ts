@@ -4,7 +4,6 @@
 import path from 'path'
 import types from 'licia/types'
 import { app, ipcMain, nativeTheme } from 'electron'
-import { isDev } from '../../common/util'
 import log from '../../common/log'
 import endWith from 'licia/endWith'
 import pkg from '../../../../package.json'
@@ -16,15 +15,18 @@ const execAsync = promisify(_exec)
 
 /** dev 下 __dirname 在 dist/share/main，生产在 app.asar 内：基路径不同 */
 export function resolve(p: string) {
-  return isDev()
-    ? path.resolve(__dirname, '../../', p)
-    : path.resolve(__dirname, '../', p)
+  // 必须用 app.isPackaged，不能用 isDev()：dev 跑的是 production 构建，
+  // isDev() 恒为 false，会把 dev 的资源路径解析到 dist/resources（那里没有
+  // resources），首次给设备推 dex 时推上去的是 0 字节文件。
+  return app.isPackaged
+    ? path.resolve(__dirname, '../', p)
+    : path.resolve(__dirname, '../../', p)
 }
 
 export function resolveResources(p: string) {
   const ret = resolve(`resources/${p}`)
   // 打包后 resources 在 asar 外面（electron-builder 的 extraResources）
-  if (!isDev() && ret.includes('app.asar')) {
+  if (app.isPackaged && ret.includes('app.asar')) {
     return path.resolve(process.resourcesPath, p)
   }
   return ret
