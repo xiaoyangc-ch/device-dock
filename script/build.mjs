@@ -1,3 +1,5 @@
+import { execSync } from 'node:child_process'
+
 const pkg = await fs.readJson('package.json')
 const electron = pkg.devDependencies.electron
 delete pkg.devDependencies
@@ -10,9 +12,9 @@ pkg.scripts = {
 }
 pkg.main = 'main/index.js'
 
-await $`npm run build:main`
-await $`npm run build:preload`
-await $`npm run build:renderer`
+await execSync('npm run build:main', { stdio: 'inherit' })
+await execSync('npm run build:preload', { stdio: 'inherit' })
+await execSync('npm run build:renderer', { stdio: 'inherit' })
 
 // 只清要复制的两个目录：dist 里还有 vite 刚产出的 main/preload/renderer，
 // 对整个 dist 做 emptyDir 会把本轮构建结果一起删掉
