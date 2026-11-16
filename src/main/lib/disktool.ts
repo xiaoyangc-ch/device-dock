@@ -14,6 +14,8 @@ import { IpcDiskPrepare, IpcDiskRun, IpcDiskScanAll } from 'common/types'
 
 const logger = log('disktool')
 const REMOTE = '/data/local/tmp/shine_disk_cli'
+const EMMC_REMOTE = '/data/local/tmp/emmc_health'
+const emmcReady = new Set<string>()
 
 function quoteArg(arg: string) {
   const value = String(arg)
@@ -123,6 +125,122 @@ function extractJson(out: string) {
   }
 }
 
+/** eMMC 检查器是独立的小二进制：只有 1MB 多，按 ABI 推一次就够。 */
+async function ensureEmmc(serial: string) {
+  if (emmcReady.has(serial)) return true
+
+  try {
+    const abi = outputOf(await shell(serial, 'getprop ro.product.cpu.abi'))
+      .toLowerCase()
+    const local = resolveResources(
+      path.join(
+        'disktool',
+        abi.includes('arm64') ? 'emmc_health_v8a' : 'emmc_health_v7a'
+      )
+    )
+    if (!fs.existsSync(local)) return false
+
+    const push = await spawnAdb(['-s', serial, 'push', local, EMMC_REMOTE])
+    const chmod = await shell(serial, 'chmod 755 ' + EMMC_REMOTE)
+    if (push.code !== 0 || chmod.code !== 0) return false
+
+    emmcReady.add(serial)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function emmcPreEolText(value: number) {
+  if (value === 0x01) return '正常'
+  if (value === 0x02) return '警告（预留块已耗 80%-90%）'
+  if (value === 0x03) return '紧急（预留块耗尽 >90%）'
+  return '未知'
+}
+
+function emmcLifeText(value: number) {
+  if (value >= 0x01 && value <= 0x0a) return `${(value - 1) * 10}%-${value * 10}%`
+  if (value === 0x0b) return '超过设计寿命'
+  return '未知'
+}
+
+function emmcVerdictText(value: unknown) {
+  switch (value) {
+    case 'ok':
+      return '正常'
+    case 'warning':
+      return '警告'
+    case 'urgent':
+      return '紧急'
+    default:
+      return '未知'
+  }
+}
+
+function emmcReport(data: any) {
+  const capacity = Number(data.capacity_bytes) || 0
+  const gib = capacity / 1024 / 1024 / 1024
+  const lines = [
+    'eMMC 健康检测',
+    `设备: ${data.device || '-'} (${data.node || '-'})`,
+    `型号: ${data.name || '未知'}`,
+    `厂商: ${data.manufacturer || '未知'}${data.manfid ? ` (MANFID ${data.manfid})` : ''}`,
+    `容量: ${gib.toFixed(1)} GiB`,
+    `序列号: ${data.serial || '-'}  生产日期: ${data.date || '-'}`,
+    `预留块状态(pre_eol_info): ${emmcPreEolText(Number(data.pre_eol))}`,
+    `寿命估计A: ${emmcLifeText(Number(data.life_a))}`,
+    `寿命估计B: ${emmcLifeText(Number(data.life_b))}`,
+    `综合结论: ${emmcVerdictText(data.verdict)}`,
+    `数据来源: ${data.source || '-'}`,
+  ]
+
+  if (data.error) lines.push(`读取说明: ${data.error}`)
+  if (data.os_error) lines.push(`系统返回: ${data.os_error}`)
+  return lines.join('\n')
+}
+
+/** 读 eMMC 的身份信息 + JEDEC Ext CSD 健康字段；失败返回 null，不阻塞硬盘列表。 */
+async function scanEmmc(serial: string) {
+  if (!(await ensureEmmc(serial))) return null
+
+  try {
+    // 网络设备不做 adb root（会断 TCP）；只尝试 su 0，失败则降级为无健康字段。
+    const rooted = await shell(serial, `su 0 ${EMMC_REMOTE} --json`)
+    const rootedOut = outputOf(rooted)
+    const rootOk =
+      rooted.code === 0 &&
+      !/Permission denied|not found|inaccessible/i.test(rootedOut.slice(0, 200))
+
+    const out = rootOk
+      ? rootedOut
+      : outputOf(await shell(serial, `${EMMC_REMOTE} --json`))
+    const data = extractJson(out)
+    if (!data || !data.device) return null
+
+    const verdict = data.verdict
+    const passed =
+      verdict === 'ok' ? true : verdict === 'warning' || verdict === 'urgent' ? false : null
+
+    return {
+      id: `emmc:${data.device}`,
+      model: [data.manufacturer, data.name].filter(Boolean).join(' ') || 'eMMC',
+      serial: data.serial || '',
+      capacity: Number(data.capacity_bytes) || 0,
+      transport: 'emmc',
+      system: true,
+      temp: null,
+      hours: 0,
+      cycles: 0,
+      passed,
+      health: null,
+      emmc: data,
+      report: emmcReport(data),
+    }
+  } catch {
+    return null
+  }
+}
+
 const abiCache: Record<string, string> = {}
 
 async function ensure(serial: string) {
@@ -145,51 +263,84 @@ async function ensure(serial: string) {
 }
 
 const scanAll: IpcDiskScanAll = async (serial) => {
+  const rows: any[] = []
+  let hardOut = ''
+
   try {
     const prep = await ensure(serial)
-    if (!prep.ok) return { ok: false, out: prep.out }
+    if (!prep.ok) {
+      hardOut = prep.out
+    } else {
+      const listResult = await run(serial, ['list', '--json'])
+      const list = extractJson(listResult.out)
+      if (!list || !Array.isArray(list.disks)) {
+        hardOut = '无法解析磁盘列表\n' + listResult.out
+      } else {
+        for (const disk of list.disks) {
+          const health = extractJson(
+            (await run(serial, ['health', disk.platform_id, '--json'])).out
+          ) || {}
 
-    const listResult = await run(serial, ['list', '--json'])
-    const list = extractJson(listResult.out)
-    if (!list || !Array.isArray(list.disks)) {
-      return { ok: false, out: '无法解析磁盘列表\n' + listResult.out }
+          rows.push({
+            id: disk.platform_id,
+            model: disk.model || '',
+            serial: disk.serial || '',
+            capacity: disk.capacity_bytes || 0,
+            transport: disk.transport,
+            system: disk.system_disk === 1,
+            temp:
+              health.temperature_available === 1 &&
+              typeof health.temperature_celsius === 'number'
+                ? health.temperature_celsius
+                : null,
+            hours: health.power_on_hours || 0,
+            cycles: health.power_cycle_count || 0,
+            // 0/1 之外还有「未上报 SMART」：null 既不是失败也不是健康
+            passed:
+              health.smart_overall_passed === 1
+                ? true
+                : health.smart_overall_passed === 0
+                  ? false
+                  : null,
+            health: typeof health.health === 'number' ? health.health : null,
+          })
+        }
+      }
     }
-
-    const rows: any[] = []
-    for (const disk of list.disks) {
-      const health = extractJson(
-        (await run(serial, ['health', disk.platform_id, '--json'])).out
-      ) || {}
-
-      rows.push({
-        id: disk.platform_id,
-        model: disk.model || '',
-        serial: disk.serial || '',
-        capacity: disk.capacity_bytes || 0,
-        transport: disk.transport,
-        system: disk.system_disk === 1,
-        temp:
-          health.temperature_available === 1 &&
-          typeof health.temperature_celsius === 'number'
-            ? health.temperature_celsius
-            : null,
-        hours: health.power_on_hours || 0,
-        cycles: health.power_cycle_count || 0,
-        // 0/1 之外还有「未上报 SMART」：null 既不是失败也不是健康
-        passed:
-          health.smart_overall_passed === 1
-            ? true
-            : health.smart_overall_passed === 0
-              ? false
-              : null,
-        health: typeof health.health === 'number' ? health.health : null,
-      })
-    }
-    return { ok: true, disks: rows }
   } catch (e: any) {
-    logger.error('scanAll failed', e)
-    return { ok: false, out: '扫描失败: ' + (e?.message || e) }
+    hardOut = '硬盘扫描失败: ' + (e?.message || e)
   }
+
+  // eMMC 与 SATA/USB 是两条独立通道；外接盘工具失败也要把内置 eMMC 显示出来。
+  // DiskToolkit 的 list 本身可能也把 mmcblk0 当系统盘列出来：这种情况下用
+  // eMMC 的健康数据覆盖那一行，避免同一块盘出现两行（一行还误报异常）。
+  const emmc = await scanEmmc(serial)
+  if (emmc) {
+    const target = String(emmc.emmc?.device || '')
+    const index = rows.findIndex((disk) => {
+      const id = String(disk.id || '')
+      return (
+        id === target ||
+        disk.transport === 'emmc' ||
+        (id.startsWith('mmcblk') && /emmc/i.test(String(disk.model || '')))
+      )
+    })
+
+    if (index >= 0) {
+      rows[index] = {
+        ...rows[index],
+        ...emmc,
+        id: rows[index].id,
+      }
+    } else {
+      rows.push(emmc)
+    }
+  }
+
+  if (!rows.length) {
+    return { ok: false, out: hardOut || '未发现可检测的硬盘或 eMMC' }
+  }
+  return { ok: true, disks: rows, out: hardOut }
 }
 
 export function init() {

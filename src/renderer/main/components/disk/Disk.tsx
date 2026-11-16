@@ -114,6 +114,9 @@ export default observer(function Disk() {
               return el
             })(),
             serial: d.serial || '-',
+            // eMMC 与 SATA/USB 的外接盘共用同一张表；详情直接复用扫描时生成的报告
+            emmc: d.emmc || null,
+            report: d.report || '',
             // 状态列是 JSX，排序要按纯文本
             statusText: statusText(d.passed),
           }))
@@ -149,6 +152,13 @@ export default observer(function Disk() {
   async function detail(row?: any) {
     const target = row || selected
     if (!device || !target) return
+
+    // eMMC 不是外接盘：扫描时已经拿到完整 JSON/报告，不再走 shine_disk_cli
+    if (target.emmc) {
+      setSelected(target)
+      setReport(target.report || t('diskNoOutput'))
+      return
+    }
 
     const seq = ++detailSeq.current
     setBusy(true)
