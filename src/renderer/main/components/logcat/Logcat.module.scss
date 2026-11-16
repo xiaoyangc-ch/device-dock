@@ -1,4 +1,5 @@
 .body {
+  position: relative;
   background: var(--ui-bg);
 }
 
@@ -8,4 +9,26 @@
   height: 100%;
   border: none !important;
   font-size: 11.5px;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.emptyTitle {
+  color: var(--ui-text-2);
+  font-size: 12px;
+}
+
+.emptyHint {
+  color: var(--ui-text-3);
+  font-size: 11px;
 }

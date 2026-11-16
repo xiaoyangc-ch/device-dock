@@ -43,6 +43,7 @@ export default observer(function Logcat() {
     tag?: string
   }>({})
   const [logcatId, setLogcatId] = useState('')
+  const [entryCount, setEntryCount] = useState(0)
   const [pageHidden, setPageHidden] = useState(document.hidden)
 
   const logcatRef = useRef<Logcat>(null)
@@ -58,12 +59,19 @@ export default observer(function Logcat() {
   const { device } = store
 
   useEffect(() => {
+    // 换设备先清空上一台的视图和影子副本，避免空状态误判
+    setLogcatId('')
+    setEntryCount(0)
+    entriesRef.current = []
+    pendingEntriesRef.current = []
+
     function onEntries(id: string, entries: any[]) {
       // 首个批次可能先于 openLogcat 的返回值到达：先把 id 认下来
       if (!logcatIdRef.current) logcatIdRef.current = id
       if (logcatIdRef.current !== id) return
       if (!logcatRef.current) {
         pendingEntriesRef.current.push(...entries)
+        setEntryCount((count) => count + entries.length)
         return
       }
 
@@ -75,6 +83,7 @@ export default observer(function Logcat() {
       if (entriesRef.current.length > MAX_ENTRIES) {
         entriesRef.current.splice(0, entriesRef.current.length - MAX_ENTRIES)
       }
+      setEntryCount(entriesRef.current.length)
     }
 
     const offEntries = main.on('logcatEntries', onEntries)
@@ -115,8 +124,7 @@ export default observer(function Logcat() {
   useEffect(() => {
     const onVisibility = () => setPageHidden(document.hidden)
     document.addEventListener('visibilitychange', onVisibility)
-    return () =>
-      document.removeEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [])
 
   useEffect(() => {
@@ -137,10 +145,10 @@ export default observer(function Logcat() {
         `${dateFormat(entry.date, 'mm-dd HH:MM:ss.l')} ${rpad(
           entry.pid,
           5,
-          ' '
+          ' ',
         )} ${rpad(entry.tid, 5, ' ')} ${toLetter(entry.priority)} ${
           entry.tag
-        }: ${entry.message}`.trim()
+        }: ${entry.message}`.trim(),
       )
       .join('\n')
 
@@ -154,6 +162,8 @@ export default observer(function Logcat() {
   function clear() {
     logcatRef.current?.clear()
     entriesRef.current = []
+    pendingEntriesRef.current = []
+    setEntryCount(0)
   }
 
   function restart() {
@@ -234,9 +244,7 @@ export default observer(function Logcat() {
             { label: 'WARNING', value: '5' },
             { label: 'ERROR', value: '6' },
           ]}
-          onChange={(value) =>
-            setFilter({ ...filter, priority: toNum(value) })
-          }
+          onChange={(value) => setFilter({ ...filter, priority: toNum(value) })}
         />
         <ToolInput
           value={filter.package || ''}
@@ -307,6 +315,22 @@ export default observer(function Logcat() {
             for (const entry of pending) instance.append(entry)
           }}
         />
+        {entryCount === 0 && (
+          <div className={Style.empty}>
+            <div className={Style.emptyTitle}>
+              {!device
+                ? t('deviceNotConnected')
+                : paused
+                  ? t('logcatPaused')
+                  : logcatId
+                    ? t('logcatWaiting')
+                    : t('logcatConnecting')}
+            </div>
+            {device && !paused && (
+              <div className={Style.emptyHint}>{t('logcatHint')}</div>
+            )}
+          </div>
+        )}
       </PageBody>
     </Page>
   )

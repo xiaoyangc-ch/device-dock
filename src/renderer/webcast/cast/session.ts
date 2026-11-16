@@ -6,6 +6,7 @@
  */
 import {
   AndroidKeyCode,
+  ScrcpyAudioCodec,
   ScrcpyOptions3_1,
   ScrcpyVideoCodecId,
 } from '@yume-chan/scrcpy'
@@ -13,6 +14,7 @@ import {
   InsertableStreamVideoFrameRenderer,
   WebCodecsVideoDecoder,
 } from '@yume-chan/scrcpy-decoder-webcodecs'
+import { Float32PlanerPcmPlayer } from '@yume-chan/pcm-player'
 import { ControlChannel } from './control'
 import { decodeIncoming } from './protocol'
 import { makeScid } from './scid'
@@ -26,6 +28,8 @@ export interface CastConfig {
   maxFps: number
   codec: 'h264' | 'h265'
   displayId?: number
+  /** 是否转发设备音频；关闭时保持原来的纯视频通道 */
+  audio?: boolean
 }
 
 export interface SessionHooks {
@@ -47,8 +51,12 @@ export class CastSession {
   readonly control: ControlChannel
 
   private video: SocketStream | null = null
+  private audio: SocketStream | null = null
   private ctl: SocketStream | null = null
   private decoder: WebCodecsVideoDecoder | null = null
+  private audioDecoder: AudioDecoder | null = null
+  private audioPlayer: Float32PlanerPcmPlayer | null = null
+  private audioTimestamp = 0
   private videoElement: HTMLVideoElement | null = null
   private state: SessionState = 'idle'
   private disposed = false
@@ -57,12 +65,12 @@ export class CastSession {
 
   constructor(
     private readonly deviceId: string,
-    private readonly hooks: SessionHooks
+    private readonly hooks: SessionHooks,
   ) {
     this.control = new ControlChannel(
       (id, data) => node.writeStream(id, data),
       (text) => hooks.onClipboard(text),
-      (message) => hooks.onToast(message)
+      (message) => hooks.onToast(message),
     )
   }
 
@@ -93,7 +101,9 @@ export class CastSession {
     await this.stopTransport()
 
     const options = new ScrcpyOptions3_1({
-      audio: false,
+      audio: !!config.audio,
+      audioCodec: 'opus',
+      audioBitRate: 128000,
       control: true,
       maxSize: config.maxSize,
       videoBitRate: config.bitRate,
@@ -110,7 +120,7 @@ export class CastSession {
 
     const reverse = await main.reverseWebCast(
       this.deviceId,
-      `localabstract:scrcpy_${scid.padStart(8, '0')}`
+      `localabstract:scrcpy_${scid.padStart(8, '0')}`,
     )
     if (!reverse.ok) throw new Error(reverse.error || 'adb forward 失败')
     if (this.disposed) return
@@ -125,6 +135,13 @@ export class CastSession {
     this.video = await this.openVideo(reverse.port)
     if (this.disposed) return
 
+    // scrcpy 开了 audio 后，同一个 forward 端口会按 video → audio → control
+    // 的顺序 accept；音频必须插在 control 前面，否则控制通道会收到音频流。
+    if (config.audio) {
+      this.audio = await this.openAudio(reverse.port)
+      if (this.disposed) return
+    }
+
     this.ctl = await this.openControl(reverse.port)
     if (this.ctl) {
       this.control.attach(this.ctl.id)
@@ -132,6 +149,11 @@ export class CastSession {
     }
 
     await this.attachVideo(options, this.video.stream)
+    if (config.audio && this.audio) {
+      this.attachAudio(options, this.audio.stream).catch((e: Error) => {
+        if (!this.disposed) this.hooks.onToast(e.message || '音频流不可用')
+      })
+    }
   }
 
   private async openVideo(port: number) {
@@ -161,12 +183,100 @@ export class CastSession {
     return null
   }
 
-  private async attachVideo(
-    options: ScrcpyOptions3_1,
-    raw: any
-  ) {
+  private async openAudio(port: number) {
+    for (let attempt = 0; attempt < CONTROL_ATTEMPTS; attempt++) {
+      try {
+        return await SocketStream.open(port)
+      } catch {
+        await sleep(RETRY_DELAY)
+      }
+    }
+    throw new Error('连接音频流失败')
+  }
+
+  /**
+   * scrcpy 的音频是独立 socket：4 字节 codec 元数据 + 一串 Opus 包。
+   * 这里用 WebCodecs 解 Opus，再交给 pcm-player 输出；解码失败只影响声音，
+   * 不把整路投屏判死。
+   */
+  private async attachAudio(options: ScrcpyOptions3_1, raw: any) {
+    const metadata = await options.parseAudioStreamMetadata(raw)
+    if (metadata.type !== 'success') {
+      throw new Error('设备没有可用的音频输出')
+    }
+    if (metadata.codec !== ScrcpyAudioCodec.Opus) {
+      throw new Error(`不支持的音频编码：${metadata.codec}`)
+    }
+
+    const AudioDecoderCtor = (globalThis as any).AudioDecoder
+    const EncodedAudioChunkCtor = (globalThis as any).EncodedAudioChunk
+    if (!AudioDecoderCtor || !EncodedAudioChunkCtor) {
+      throw new Error('当前系统不支持 Opus 音频解码')
+    }
+
+    const player = new Float32PlanerPcmPlayer(48000, 2)
+    this.audioPlayer = player
+    await player.start()
+    if (this.disposed) {
+      await player.stop()
+      return
+    }
+
+    const decoder = new AudioDecoderCtor({
+      output: (data: any) => {
+        try {
+          if (this.disposed) return
+          const planes: Float32Array[] = []
+          for (let i = 0; i < data.numberOfChannels; i++) {
+            const plane = new Float32Array(data.numberOfFrames)
+            data.copyTo(plane, { planeIndex: i, format: 'f32-planar' })
+            planes.push(plane)
+          }
+          player.feed(planes)
+        } finally {
+          data.close()
+        }
+      },
+      error: () => {
+        if (!this.disposed) this.hooks.onToast('音频解码中断')
+      },
+    })
+    this.audioDecoder = decoder
+    decoder.configure({
+      codec: 'opus',
+      sampleRate: 48000,
+      numberOfChannels: 2,
+    })
+
+    metadata.stream
+      .pipeThrough(options.createMediaStreamTransformer())
+      .pipeTo(
+        new WritableStream({
+          write: (packet: any) => {
+            if (this.disposed || packet?.type !== 'data') return
+            this.audioTimestamp =
+              Number(packet.pts || 0) || this.audioTimestamp + 20000
+            decoder.decode(
+              new EncodedAudioChunkCtor({
+                type: 'key',
+                timestamp: this.audioTimestamp,
+                data: packet.data,
+              }),
+            )
+          },
+          close: () => {
+            void decoder.flush().catch(() => {})
+          },
+        }) as any,
+      )
+      .catch(() => {
+        if (!this.disposed) this.hooks.onToast('音频流已结束')
+      })
+  }
+
+  private async attachVideo(options: ScrcpyOptions3_1, raw: any) {
     const { stream, metadata } = await options.parseVideoStreamMetadata(
-      stripCompatByte(raw) as any
+      stripCompatByte(raw) as any,
     )
 
     if (
@@ -294,12 +404,24 @@ export class CastSession {
     this.videoElement = null
 
     try {
+      this.audioDecoder?.close()
+    } catch {
+      // ignore
+    }
+    this.audioDecoder = null
+    this.audioPlayer?.stop().catch(() => {})
+    this.audioPlayer = null
+    this.audioTimestamp = 0
+
+    try {
       this.video?.close()
+      this.audio?.close()
       this.ctl?.close()
     } catch {
       // ignore
     }
     this.video = null
+    this.audio = null
     this.ctl = null
 
     try {
@@ -332,12 +454,24 @@ export class CastSession {
     this.videoElement = null
 
     try {
+      this.audioDecoder?.close()
+    } catch {
+      // ignore
+    }
+    this.audioDecoder = null
+    this.audioPlayer?.stop().catch(() => {})
+    this.audioPlayer = null
+    this.audioTimestamp = 0
+
+    try {
       this.video?.close()
+      this.audio?.close()
       this.ctl?.close()
     } catch {
       // ignore
     }
     this.video = null
+    this.audio = null
     this.ctl = null
   }
 

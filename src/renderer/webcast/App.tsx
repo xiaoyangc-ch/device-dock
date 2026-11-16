@@ -29,6 +29,7 @@ const DEFAULT_CONFIG: CastConfig = {
   maxFps: 30,
   codec: 'h264',
   displayId: 0,
+  audio: false,
 }
 
 const MAX_AUTO_RETRIES = 2
@@ -112,7 +113,7 @@ export default function App() {
       // 设置是异步读出来的：开局用默认值会「设置里写 16M，实际跑 8M」
       try {
         const stored = (await main.getScreencastStore(
-          'deviceCast'
+          'deviceCast',
         )) as CastConfig | null
         if (stored?.bitRate) {
           configRef.current = { ...DEFAULT_CONFIG, ...stored }
@@ -164,7 +165,7 @@ export default function App() {
               getIme: () => imeRef.current,
               onToast: showToast,
               readClipboard: () => main.readClipboard(),
-            })
+            }),
           )
         },
       })
@@ -186,7 +187,7 @@ export default function App() {
             if (!cancelled) setRecording(active)
           },
           onToast: showToast,
-        }
+        },
       )
 
       try {
@@ -250,7 +251,7 @@ export default function App() {
         ? configRef.current.codec === 'h265'
           ? '投屏流意外中断：该设备不支持 H.265 硬件编码，请改用 H.264'
           : '投屏流意外中断：设备端编码器异常（可点下方「重新连接」）'
-        : message
+        : message,
     )
   }
 
@@ -351,7 +352,7 @@ export default function App() {
         download(
           blob,
           `screenshot-${dateFormat('yyyymmddHHMM')}.png`,
-          'image/png'
+          'image/png',
         )
       }
     }, 'image/png')
@@ -369,7 +370,7 @@ export default function App() {
       showToast(`正在安装 ${file.name}…`)
       const result = await main.installWebCastApk(deviceId, filePath)
       showToast(
-        result.ok ? `${file.name} 安装完成` : `安装失败：${result.message}`
+        result.ok ? `${file.name} 安装完成` : `安装失败：${result.message}`,
       )
     }
   }
@@ -506,8 +507,14 @@ export default function App() {
       {toast && <div className={Style.castToast}>{toast}</div>}
 
       {displaysOpen && (
-        <div className={Style.castOverlay} onClick={() => setDisplaysOpen(false)}>
-          <div className={Style.castDialog} onClick={(e) => e.stopPropagation()}>
+        <div
+          className={Style.castOverlay}
+          onClick={() => setDisplaysOpen(false)}
+        >
+          <div
+            className={Style.castDialog}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className={Style.castDialogTitle}>信号源</div>
             <div className={Style.castDialogHint}>
               副屏（HDMI）只有在设备端有内容输出时才有画面，否则是黑屏；可随时切回主屏。
@@ -542,7 +549,7 @@ export default function App() {
             // 「重启设备」放设置里：工具栏上误点会把门店机重启
             if (
               !window.confirm(
-                `确定要重启「${deviceName}」吗？重启期间投屏会中断。`
+                `确定要重启「${deviceName}」吗？重启期间投屏会中断。`,
               )
             ) {
               return
@@ -581,7 +588,8 @@ function SettingsDialog(props: {
             }
           >
             {[
-              4000000, 8000000, 12000000, 16000000, 24000000, 32000000, 50000000,
+              4000000, 8000000, 12000000, 16000000, 24000000, 32000000,
+              50000000,
             ].map((value) => (
               <option key={value} value={value}>
                 {value / 1000000} Mbps
@@ -631,12 +639,30 @@ function SettingsDialog(props: {
             <option value={60}>60 FPS</option>
           </select>
         </label>
+        <label className={Style.castField}>
+          <span>音频</span>
+          <select
+            value={draft.audio ? 'on' : 'off'}
+            onChange={(e) =>
+              setDraft({ ...draft, audio: e.target.value === 'on' })
+            }
+          >
+            <option value="off">关闭</option>
+            <option value="on">转发设备声音（实验）</option>
+          </select>
+        </label>
+        <div className={Style.castFieldHint}>
+          开启后使用 Opus 48kHz 独立音频通道；设备不支持时只保留画面
+        </div>
         <div className={Style.castDialogActions}>
           <button className={Style.castReboot} onClick={props.onReboot}>
             重启设备
           </button>
           <button onClick={props.onCancel}>取消</button>
-          <button className={Style.castPrimary} onClick={() => props.onSave(draft)}>
+          <button
+            className={Style.castPrimary}
+            onClick={() => props.onSave(draft)}
+          >
             保存并重连
           </button>
         </div>

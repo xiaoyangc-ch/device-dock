@@ -34,6 +34,21 @@ const PAGE_SIZE = 1000
 const DIR_CACHE_TTL = 15000
 const DIR_CACHE_MAX = 12
 const SEARCH_DEBOUNCE = 300
+// 普通用户进文件页是想看内部存储，不是 /acct、/apex 这些系统目录
+const DEFAULT_DIR = '/sdcard/'
+
+function lastPathKey(deviceId: string) {
+  return `file:lastPath:${deviceId}`
+}
+
+function readLastPath(deviceId: string) {
+  try {
+    const value = localStorage.getItem(lastPathKey(deviceId))
+    return value && value.startsWith('/') ? value : ''
+  } catch {
+    return ''
+  }
+}
 
 export default observer(function File() {
   const [fileList, setFileList] = useState<IFile[]>([])
@@ -75,7 +90,7 @@ export default observer(function File() {
 
   const iconCache = useRef(new Map<string, string>()).current
   const dirCache = useRef(
-    new Map<string, { files: IFile[]; total: number; ts: number }>()
+    new Map<string, { files: IFile[]; total: number; ts: number }>(),
   ).current
 
   const [total, setTotal] = useState(0)
@@ -120,11 +135,26 @@ export default observer(function File() {
     return abs.slice(abs.lastIndexOf('/') + 1)
   }
 
-  // 换设备回根目录并重列：历史也要清，否则「返回」会跳回上一台设备的路径
+  // 换设备回到该设备上次浏览的目录；首次进入内部存储，而不是根目录。
+  // 历史一起重置，否则「返回」会跳回上一台设备的路径。
   useEffect(() => {
-    updateHistory(['/'], 0)
-    getFiles('/')
+    const id = device ? device.id : ''
+    const initial = (id && readLastPath(id)) || DEFAULT_DIR
+    setPath(initial)
+    setCustomPath(initial)
+    updateHistory([initial], 0)
+    getFiles(initial)
   }, [device ? device.id : ''])
+
+  // 每台设备记住最后停留的目录；下次切回来直接续上。
+  useEffect(() => {
+    if (!device || !path || !path.startsWith('/')) return
+    try {
+      localStorage.setItem(lastPathKey(device.id), path)
+    } catch {
+      // localStorage 被禁用时不影响浏览
+    }
+  }, [device?.id, path])
 
   useEffect(() => {
     if (editingPath) {
@@ -204,7 +234,7 @@ export default observer(function File() {
         } catch {
           // 系统没有该类型图标：保持无缩略图
         }
-      })
+      }),
     )
 
     return list.map((item) => {
@@ -332,7 +362,7 @@ export default observer(function File() {
         keyword,
         searchAll,
         offset,
-        PAGE_SIZE
+        PAGE_SIZE,
       )
       if (seq !== searchSeq.current) return
 
@@ -431,12 +461,7 @@ export default observer(function File() {
       setSearchProgress(null)
 
       try {
-        const result = await main.searchDir(
-          device.id,
-          path,
-          keyword,
-          searchAll
-        )
+        const result = await main.searchDir(device.id, path, keyword, searchAll)
         if (seq !== searchSeq.current) return
 
         setTotal(result.total)
@@ -499,7 +524,7 @@ export default observer(function File() {
 
     const name = await LunaModal.prompt(
       t(item.directory ? 'newFolderName' : 'newFileName'),
-      baseName(item)
+      baseName(item),
     )
     if (!name || name === baseName(item)) return
 
@@ -560,7 +585,7 @@ export default observer(function File() {
     const index = historyIdxRef.current
     updateHistory(
       [...historyRef.current.slice(0, index + 1), target],
-      index + 1
+      index + 1,
     )
     await getFiles(target)
   }
@@ -724,7 +749,7 @@ export default observer(function File() {
     }
     notify(
       t(cut ? 'fileCutItems' : 'fileCopiedItems', { count: files.length }),
-      { icon: 'success' }
+      { icon: 'success' },
     )
   }
 
@@ -747,7 +772,7 @@ export default observer(function File() {
         device.id,
         clipboard.paths,
         dest,
-        clipboard.cut
+        clipboard.cut,
       )
 
       if (result.copied) {
@@ -762,7 +787,7 @@ export default observer(function File() {
             name: result.failed[0].name,
             error: result.failed[0].error,
           }),
-          { icon: 'error' }
+          { icon: 'error' },
         )
       }
 
@@ -782,10 +807,10 @@ export default observer(function File() {
     const confirmed =
       files.length > 1
         ? await LunaModal.confirm(
-            t('fileDeleteMultiConfirm', { count: files.length })
+            t('fileDeleteMultiConfirm', { count: files.length }),
           )
         : await LunaModal.confirm(
-            t('deleteFileConfirm', { name: files[0].name })
+            t('deleteFileConfirm', { name: files[0].name }),
           )
     if (!confirmed) return
 
@@ -976,12 +1001,14 @@ export default observer(function File() {
 
     if (conflicts.size) {
       const overwrite = await LunaModal.confirm(
-        t('uploadOverwriteConfirm', { count: conflicts.size })
+        t('uploadOverwriteConfirm', { count: conflicts.size }),
       )
       if (!overwrite) {
         list = list.filter((src) => !conflicts.has(src))
         if (!list.length) {
-          notify(t('uploadSkipped', { count: conflicts.size }), { icon: 'info' })
+          notify(t('uploadSkipped', { count: conflicts.size }), {
+            icon: 'info',
+          })
           return
         }
       }
@@ -1218,7 +1245,9 @@ export default observer(function File() {
                   const end = input.selectionEnd ?? start
                   const clean = text.replace(/\r?\n/g, ' ')
                   setFilter(
-                    input.value.slice(0, start) + clean + input.value.slice(end)
+                    input.value.slice(0, start) +
+                      clean +
+                      input.value.slice(end),
                   )
                   requestAnimationFrame(() => {
                     const pos = start + clean.length
@@ -1361,10 +1390,7 @@ export default observer(function File() {
             ) : null}
           </div>
 
-          {loading ||
-          searching ||
-          filter.trim() ||
-          fileList.length < total ? (
+          {loading || searching || filter.trim() || fileList.length < total ? (
             <div className={PageStyle.loadMore}>
               {searching ? (
                 <span>
@@ -1454,9 +1480,7 @@ export default observer(function File() {
       <div className={PageStyle.statusbar}>
         <span>{t('totalItems', { total })}</span>
         <span>{t('selectedCount', { count: selectedFiles.length })}</span>
-        {filter.trim() && (
-          <span>{t('searchFor', { kw: filter.trim() })}</span>
-        )}
+        {filter.trim() && <span>{t('searchFor', { kw: filter.trim() })}</span>}
         <span className={PageStyle.statusRight}>
           <span>
             {device
