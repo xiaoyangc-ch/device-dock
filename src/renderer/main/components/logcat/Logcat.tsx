@@ -49,6 +49,9 @@ export default observer(function Logcat() {
   // 导出用的影子副本：不能无限长，否则长会话迟早 OOM
   const entriesRef = useRef<any[]>([])
   const logcatIdRef = useRef('')
+  // 首包可能比 openLogcat 的 Promise 先到，LunaLogcat 也还没 onCreate：
+  // 先在渲染层缓冲，等实例就绪再补进去，避免日志页刚打开时丢一整段
+  const pendingEntriesRef = useRef<any[]>([])
   // 每次 open 会话自增：迟到的 openLogcat 用它对账，避免设备端留下常驻会话
   const sessionRef = useRef(0)
 
@@ -56,8 +59,13 @@ export default observer(function Logcat() {
 
   useEffect(() => {
     function onEntries(id: string, entries: any[]) {
+      // 首个批次可能先于 openLogcat 的返回值到达：先把 id 认下来
+      if (!logcatIdRef.current) logcatIdRef.current = id
       if (logcatIdRef.current !== id) return
-      if (!logcatRef.current) return
+      if (!logcatRef.current) {
+        pendingEntriesRef.current.push(...entries)
+        return
+      }
 
       for (const entry of entries) {
         logcatRef.current.append(entry)
@@ -99,6 +107,7 @@ export default observer(function Logcat() {
         main.closeLogcat(logcatIdRef.current).catch(() => {})
         logcatIdRef.current = ''
       }
+      pendingEntriesRef.current = []
     }
     // 换设备必须重开日志流：deps 为空会一直显示上一台设备的 logcat
   }, [device ? device.id : ''])
@@ -291,7 +300,12 @@ export default observer(function Logcat() {
           wrapLongLines={softWrap}
           onContextMenu={onContextMenu}
           view={view}
-          onCreate={(instance) => (logcatRef.current = instance)}
+          onCreate={(instance) => {
+            logcatRef.current = instance
+            const pending = pendingEntriesRef.current
+            pendingEntriesRef.current = []
+            for (const entry of pending) instance.append(entry)
+          }}
         />
       </PageBody>
     </Page>
