@@ -1,8 +1,8 @@
 /**
  * 投屏数据通道（preload 侧）。
  *
- * 开启 sandbox 后 preload 不能用 Node API，socket 实际由主进程建立
- * （`main/lib/stream.ts`），本文件只通过 IPC 转发数据与事件。
+ * sandbox 下 preload 不能直接用 Node socket；主进程建立连接后，
+ * 用 MessagePort 把视频数据推过来（比每帧 ipcRenderer 事件少一层路由）。
  * 对外接口保持不变：connectStream / writeStream / closeStream。
  */
 import { ipcRenderer } from 'electron'
@@ -14,41 +14,75 @@ type StreamHandlers = {
   onError: (message: string) => void
 }
 
-const handlers = new Map<number, StreamHandlers>()
+type StreamMessage = {
+  type: 'connect' | 'data' | 'close' | 'error'
+  payload?: unknown
+}
 
-ipcRenderer.on(
-  'streamEvent',
-  (_event, id: number, type: string, payload?: unknown) => {
-    const h = handlers.get(id)
-    if (!h) return
-    if (type === 'connect') {
-      h.onConnect()
-    } else if (type === 'data') {
-      h.onData(new Uint8Array(payload as ArrayBuffer))
-    } else if (type === 'close') {
-      handlers.delete(id)
-      h.onClose()
-    } else if (type === 'error') {
-      handlers.delete(id)
-      h.onError(String(payload))
-    }
-  }
-)
+interface Entry {
+  handlers: StreamHandlers
+  port: MessagePort
+}
+
+const entries = new Map<number, Entry>()
+let seq = 0
 
 export default {
-  connectStream(port: number, h: StreamHandlers): number {
-    // 同步拿 id：上层是按「调用即得 id」写的
-    const id = ipcRenderer.sendSync('streamConnect', port) as number
-    handlers.set(id, h)
+  connectStream(port: number, handlers: StreamHandlers): number {
+    const id = ++seq
+    const channel = new MessageChannel()
+    const entry: Entry = { handlers, port: channel.port1 }
+    entries.set(id, entry)
+
+    channel.port1.onmessage = (event: MessageEvent<StreamMessage>) => {
+      const current = entries.get(id)
+      if (!current) return
+      const msg = event.data
+      if (!msg || typeof msg !== 'object') return
+
+      if (msg.type === 'data') {
+        const payload = msg.payload
+        if (payload instanceof ArrayBuffer) {
+          current.handlers.onData(new Uint8Array(payload))
+        }
+      } else if (msg.type === 'connect') {
+        current.handlers.onConnect()
+      } else if (msg.type === 'close') {
+        entries.delete(id)
+        current.port.close()
+        current.handlers.onClose()
+      } else if (msg.type === 'error') {
+        entries.delete(id)
+        current.port.close()
+        current.handlers.onError(String(msg.payload || '连接已断开'))
+      }
+    }
+    channel.port1.start()
+
+    try {
+      ipcRenderer.postMessage('streamOpen', { id, port }, [channel.port2])
+    } catch (e: any) {
+      entries.delete(id)
+      queueMicrotask(() => handlers.onError(e?.message || String(e)))
+    }
+
     return id
   },
 
   writeStream(id: number, data: Uint8Array) {
+    if (!entries.has(id)) return
     ipcRenderer.send('streamWrite', id, data)
   },
 
   closeStream(id: number) {
-    handlers.delete(id)
+    const entry = entries.get(id)
+    if (!entry) return
+    entries.delete(id)
+    try {
+      entry.port.close()
+    } catch {
+      // 已关闭
+    }
     ipcRenderer.send('streamClose', id)
   },
 }

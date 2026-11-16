@@ -191,6 +191,9 @@ export async function scanPortsOf(
     concurrency?: number
     signal?: { cancelled: boolean }
     onProgress?: (done: number, total: number) => void
+    // 扫到开放端口就回调：上层可立刻做 ADB 握手，命中后提前结束全端口扫描
+    onOpen?: (port: number) => void | Promise<void>
+    shouldStop?: () => boolean
   } = {}
 ): Promise<{ openPorts: number[]; scanned: number }> {
   const timeout = options.timeout || DEFAULT_TIMEOUT
@@ -205,7 +208,11 @@ export async function scanPortsOf(
     concurrency,
     async (port) => {
       if (options.signal?.cancelled) return
-      if (await probePort(host, port, timeout)) openPorts.push(port)
+      if (options.shouldStop?.()) return
+      if (await probePort(host, port, timeout)) {
+        openPorts.push(port)
+        await options.onOpen?.(port)
+      }
       done++
       // 进度 150ms 节流：几万个端口逐条 IPC 会把渲染层压死
       const now = Date.now()
@@ -237,6 +244,29 @@ export async function scanHostPorts(
 
   const openPorts = new Set<number>()
   let scanned = 0
+  const stopEarly = { value: false }
+  let adbFound: number | null = null
+
+  // 扫到开放端口就在当前 worker 里立刻握手：命中就置位，让其余 worker 停下。
+  // 不排到后台队列——深层扫描的几千个超时定时器会把后台握手拖到扫描结束才执行。
+  const probeOpenPort = async (port: number) => {
+    if (adbFound !== null || isCancelled()) return
+    try {
+      if (await probeAdbPort(host, port, 600)) {
+        adbFound = port
+        stopEarly.value = true
+        logger.info('adb found while scanning', host, port)
+      }
+    } catch {
+      // 握手失败按非 ADB 处理，后面 detectAdb 还会兜底
+    }
+  }
+
+  const scanSignal = {
+    get cancelled() {
+      return isCancelled() || stopEarly.value
+    },
+  }
 
   const scan = async (
     ports: number[],
@@ -246,7 +276,9 @@ export async function scanHostPorts(
     const result = await scanPortsOf(host, ports, {
       timeout,
       concurrency,
-      signal: scanToken,
+      signal: scanSignal,
+      onOpen: probeOpenPort,
+      shouldStop: () => stopEarly.value,
       onProgress: (done, total) => report({ phase, done, total }),
     })
     for (const port of result.openPorts) openPorts.add(port)
@@ -280,7 +312,9 @@ export async function scanHostPorts(
     await scan(quickPorts, QUICK_CONCURRENCY, 'quick')
     let adbPorts = isCancelled()
       ? []
-      : await detectAdb([...openPorts].sort((a, b) => a - b))
+      : adbFound !== null
+        ? [adbFound]
+        : await detectAdb([...openPorts].sort((a, b) => a - b))
 
     // 常用段没有 ADB：全端口兜底（跳过已扫过的）
     if (!isCancelled() && !adbPorts.length && options.deep !== false) {
@@ -292,7 +326,9 @@ export async function scanHostPorts(
       await scan(rest, DEEP_CONCURRENCY, 'deep')
       adbPorts = isCancelled()
         ? []
-        : await detectAdb([...openPorts].sort((a, b) => a - b))
+        : adbFound !== null
+          ? [adbFound]
+          : await detectAdb([...openPorts].sort((a, b) => a - b))
     }
 
     const result: PortScanResult = {

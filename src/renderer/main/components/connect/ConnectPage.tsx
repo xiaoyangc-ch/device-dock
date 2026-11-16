@@ -28,6 +28,7 @@ import PageToolbar, {
 // 端口扫描进度由主进程按 150ms 节流推送：模块级只订阅一次，
 // 页面卸载后 sink 置空，不会往已卸载组件 setState
 let progressSink: ((text: string) => void) | null = null
+let lanSink: ((text: string) => void) | null = null
 let subscribed = false
 
 function subscribeProgress() {
@@ -51,6 +52,16 @@ function subscribeProgress() {
             : t('connectPortCommon')
 
       progressSink(`${label} ${percent}%`)
+    }
+  )
+
+  main.on(
+    'lanScanProgress',
+    (payload: { phase: 'probe' | 'connect'; done: number; total: number }) => {
+      if (!lanSink) return
+      lanSink(
+        `${payload.phase === 'connect' ? t('connect') : t('connectLan')} ${payload.done}/${payload.total}`
+      )
     }
   )
 }
@@ -92,14 +103,17 @@ export default observer(function ConnectPage() {
   const [portScanning, setPortScanning] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [progress, setProgress] = useState('')
+  const [lanProgress, setLanProgress] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<DataGrid | null>(null)
 
   useEffect(() => {
     subscribeProgress()
     progressSink = setProgress
+    lanSink = setLanProgress
     return () => {
       progressSink = null
+      lanSink = null
     }
   }, [])
 
@@ -207,6 +221,7 @@ export default observer(function ConnectPage() {
       notify(t('connectScanFail') + (e?.message || e), { icon: 'error' })
     } finally {
       setScanning(false)
+      setLanProgress('')
     }
   }
 
@@ -269,7 +284,10 @@ export default observer(function ConnectPage() {
           disabled={connecting || portScanning}
         />
         <ToolButton
-          label={scanning ? t('connectScanning') : t('connectLan')}
+          label={
+            scanning ? lanProgress || t('connectScanning') : t('connectLan')
+          }
+          title={scanning ? lanProgress : undefined}
           onClick={scanLan}
           disabled={scanning}
         />

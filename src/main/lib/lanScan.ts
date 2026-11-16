@@ -91,7 +91,7 @@ function probe(host: string, port: number): Promise<boolean> {
 async function forEachLimit<T>(
   items: T[],
   limit: number,
-  fn: (item: T) => Promise<void>
+  fn: (item: T, index: number) => Promise<void>
 ) {
   let next = 0
   const workers = Array.from(
@@ -100,38 +100,75 @@ async function forEachLimit<T>(
       for (;;) {
         const index = next++
         if (index >= items.length) return
-        await fn(items[index])
+        await fn(items[index], index)
       }
     }
   )
   await Promise.all(workers)
 }
 
-export async function scanLan(): Promise<{
+export type LanScanProgress = {
+  phase: 'probe' | 'connect'
+  done: number
+  total: number
+}
+
+export async function scanLan(
+  onProgress?: (progress: LanScanProgress) => void
+): Promise<{
   scanned: number
   found: { id: string; connected: boolean }[]
 }> {
   const hosts = localCandidates()
   const open: string[] = []
+  let probed = 0
+  let lastProbeReport = 0
 
   await forEachLimit(hosts, CONCURRENCY, async (host) => {
     if (await probe(host, ADB_PORT)) open.push(host)
+    probed++
+    const now = Date.now()
+    if (
+      onProgress &&
+      (now - lastProbeReport > 100 || probed === hosts.length)
+    ) {
+      lastProbeReport = now
+      onProgress({ phase: 'probe', done: probed, total: hosts.length })
+    }
   })
 
-  const found: { id: string; connected: boolean }[] = []
-  for (const ip of open.sort((a, b) => ipToNum(a) - ipToNum(b))) {
+  // 先并行探测，再并发 connect：串行 connect 遇到不可达设备会一台等 8 秒
+  open.sort((a, b) => ipToNum(a) - ipToNum(b))
+  const found: { id: string; connected: boolean }[] = new Array(open.length)
+  let connectedDone = 0
+  let lastConnectReport = 0
+
+  await forEachLimit(open, 4, async (ip, index) => {
     const id = `${ip}:${ADB_PORT}`
     try {
       const result = await spawnAdb(['connect', id], 8000)
       const out = `${result.stdout || ''}\n${result.stderr || ''}`
       const connected =
         /connected/i.test(out) && !/cannot|failed|refused/i.test(out)
-      found.push({ id, connected })
+      found[index] = { id, connected }
     } catch (e: any) {
       logger.warn('adb connect failed', id, e && e.message)
-      found.push({ id, connected: false })
+      found[index] = { id, connected: false }
     }
-  }
+    connectedDone++
+    const now = Date.now()
+    if (
+      onProgress &&
+      (now - lastConnectReport > 100 || connectedDone === open.length)
+    ) {
+      lastConnectReport = now
+      onProgress({
+        phase: 'connect',
+        done: connectedDone,
+        total: open.length,
+      })
+    }
+  })
 
-  return { scanned: hosts.length, found }
+  return { scanned: hosts.length, found: found.filter(Boolean) }
 }

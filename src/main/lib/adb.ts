@@ -765,7 +765,11 @@ export async function init() {
   port.init(client)
 
   handleEvent('getDevices', getDevices)
-  handleEvent('scanLanDevices', scanLan)
+  handleEvent('scanLanDevices', () =>
+    scanLan((progress) =>
+      window.sendTo('main', 'lanScanProgress', progress)
+    )
+  )
   handleEvent('scanDevicePorts', scanDevicePorts)
   handleEvent('cancelPortScan', cancelDevicePortScan)
   handleEvent('getOverview', getOverview)

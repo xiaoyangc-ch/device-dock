@@ -1,6 +1,7 @@
 import builder from 'electron-builder'
 import isMac from 'licia/isMac.js'
 import isWindows from 'licia/isWindows.js'
+import { resolve } from 'node:path'
 
 cd('dist')
 

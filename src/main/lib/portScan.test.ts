@@ -98,3 +98,27 @@ test('端口扫描能区分开放与关闭端口', async () => {
     await closeServer(open)
   }
 })
+
+test('onOpen 命中 ADB 后 shouldStop 能让剩余端口提前结束', async () => {
+  const { server, port } = await fakeAdbDevice()
+  // 开放端口放第一个；后面全是不存在的端口，正常情况下要扫完才返回
+  const ports = [port, ...Array.from({ length: 500 }, (_, i) => port + 100 + i)]
+  let stop = false
+
+  try {
+    const result = await scanPortsOf('127.0.0.1', ports, {
+      timeout: 30,
+      concurrency: 8,
+      onOpen: async (openPort) => {
+        if (openPort === port) stop = true
+      },
+      shouldStop: () => stop,
+    })
+
+    assert.ok(result.openPorts.includes(port))
+    assert.equal(result.openPorts.length, 1)
+    assert.ok(result.scanned < ports.length, '命中后不应继续扫剩余端口')
+  } finally {
+    await closeServer(server)
+  }
+})
