@@ -2,7 +2,10 @@ package com.devicedock.server
 
 import android.net.LocalServerSocket
 import android.util.Log
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 class Server {
     companion object {
@@ -18,7 +21,17 @@ class Server {
         }
     }
 
-    private val executor = Executors.newCachedThreadPool()
+    private val executor = ThreadPoolExecutor(
+        4,
+        4,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(16),
+        Executors.defaultThreadFactory()
+    ) { runnable, _ ->
+        (runnable as? Connection)?.closeQuietly()
+        Log.w(TAG, "Too many device service connections")
+    }
     fun start(args: Array<String>) {
         Log.i(TAG, "Start server")
 

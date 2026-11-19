@@ -4,7 +4,6 @@
  */
 import LunaMenu from 'luna-menu'
 import isFn from 'licia/isFn'
-import uuid from 'licia/uuid'
 import types from 'licia/types'
 
 let callbacks: types.PlainObj<types.AnyFn> = {}
@@ -12,7 +11,7 @@ let callbacks: types.PlainObj<types.AnyFn> = {}
 function transTpl(template: any[]) {
   for (const item of template as any[]) {
     if (isFn(item.click)) {
-      const id = uuid()
+      const id = crypto.randomUUID()
       callbacks[id] = item.click
       item.click = id
     }
@@ -36,7 +35,7 @@ LunaMenu.build = function (template) {
 
 export default function contextMenu(
   e: { clientX: number; clientY: number },
-  template: any
+  template: any,
 ) {
   const menu = LunaMenu.build(template)
   // 等当前 click 事件结束再弹：否则菜单会被这次点击直接关掉

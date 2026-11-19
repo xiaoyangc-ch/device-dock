@@ -19,7 +19,12 @@ import { LoadingBar } from 'share/renderer/components/loading'
 import { t } from 'common/util'
 import { AndroidKeyCode } from '@yume-chan/scrcpy'
 import Style from './App.module.scss'
-import { CastConfig, CastSession, SessionState } from './cast/session'
+import {
+  AudioUnavailableError,
+  CastConfig,
+  CastSession,
+  SessionState,
+} from './cast/session'
 import { bindKeyboard, bindPointer, hasNonAscii } from './cast/input'
 import { ScreenRecorder } from './cast/recorder'
 
@@ -217,6 +222,15 @@ export default function App() {
   /** 启动失败：先自动重试，再考虑 H.265 回退，最后才展示错误。 */
   function handleStartFailure(e: any) {
     const message = String(e?.message || e)
+
+    // 音频 socket 失败后不能直接跳过去连 control，否则 control 会接到音频通道。
+    // 关掉音频并重启会话，优先保证画面可用。
+    if (e instanceof AudioUnavailableError && configRef.current.audio) {
+      applyConfig({ ...configRef.current, audio: false })
+      showToast('设备音频通道不可用，已关闭音频并重连画面')
+      setGeneration((value) => value + 1)
+      return
+    }
 
     // rk3399 这类设备没有可用 HEVC 编码器：server 打印
     // "Could not create default video encoder for h265" 后退出，

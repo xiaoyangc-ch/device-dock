@@ -4,6 +4,7 @@
  */
 import sleep from 'licia/sleep'
 import { shell } from './base'
+import { parseCpuTemperature } from './cpuParse'
 
 const DEFAULT_PERIOD = 50
 
@@ -87,21 +88,7 @@ export async function getCpus(deviceId: string, speed = true) {
   return cpus
 }
 
-const TEMPERATURE_RE =
-  /Temperature\{mValue=([\d.]+),\s*mType=(\d+),\s*mName=(\w+)/
-
 export async function getCpuTemperature(deviceId: string) {
   const thermal = String(await shell(deviceId, 'dumpsys thermalservice'))
-  const values: number[] = []
-
-  for (const line of thermal.split('\n')) {
-    const matched = line.match(TEMPERATURE_RE)
-    if (!matched) continue
-    if (!matched[3].startsWith('CPU')) continue
-    values.push(Number(matched[1]) || 0)
-  }
-
-  if (!values.length) return 0
-  const average = values.reduce((sum, value) => sum + value, 0) / values.length
-  return Number(average.toFixed(3))
+  return parseCpuTemperature(thermal)
 }

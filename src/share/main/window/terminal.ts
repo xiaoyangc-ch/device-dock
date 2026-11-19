@@ -6,11 +6,15 @@ import { BrowserWindow, ipcMain } from 'electron'
 import * as window from '../../main/lib/window'
 import once from 'licia/once'
 import { IpcGetLogs } from '../../common/types'
+import { assertTrustedSender } from '../lib/util'
 
 const MAX_LOGS = 5000
+const MAX_LOG_CHARS = 2_000_000
+const MAX_ENTRY_CHARS = 64 * 1024
 
 let win: BrowserWindow | null = null
 const logs: string[] = []
+let logChars = 0
 
 export function showWin() {
   if (win && !win.isDestroyed()) {
@@ -60,15 +64,25 @@ function addLog(data: unknown) {
   const text = Buffer.isBuffer(data)
     ? data.toString('utf8')
     : String(data ?? '')
-  logs.push(text)
-  if (logs.length > MAX_LOGS) {
-    logs.splice(0, logs.length - MAX_LOGS)
+  const entry = text.slice(-MAX_ENTRY_CHARS)
+  logs.push(entry)
+  logChars += entry.length
+  while (logs.length > MAX_LOGS || logChars > MAX_LOG_CHARS) {
+    const removed = logs.shift()
+    logChars -= removed?.length || 0
   }
   // 窗口没开时 sendTo 会静默丢弃，日志仍留在缓冲里
-  window.sendTo('terminal', 'addLog', text)
+  window.sendTo('terminal', 'addLog', entry)
 }
 
 const initIpc = once(() => {
-  ipcMain.handle('getLogs', <IpcGetLogs>(() => logs))
-  ipcMain.handle('clearLogs', () => (logs.length = 0))
+  ipcMain.handle('getLogs', <IpcGetLogs>((event: any) => {
+    assertTrustedSender(event)
+    return logs
+  }))
+  ipcMain.handle('clearLogs', (event) => {
+    assertTrustedSender(event)
+    logs.length = 0
+    logChars = 0
+  })
 })

@@ -7,7 +7,7 @@
  *
  * 所有连接都按设备缓存，设备移除时由 base.deleteDeviceStore 调 dispose()。
  */
-import uuid from 'licia/uuid'
+import { randomUUID } from 'node:crypto'
 import { Client } from '@devicefarmer/adbkit'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
 import wire from '../wire'
@@ -15,10 +15,54 @@ import waitUntil from 'licia/waitUntil'
 import { forwardTcp, getDeviceStore, setDeviceStore, shell } from './base'
 import log from 'share/common/log'
 import { IPackageInfo, IpcGetFileUrl, IpcGetPackageInfos } from 'common/types'
+import { encodeDevicePath } from './filePath'
+import { normalizeDevicePath } from 'common/guards'
+import { LruCache } from 'common/lru'
+import { parsePackageListing } from './packageParse'
+import pkg from '../../../../package.json'
+import { isDeviceServerCompatible } from './deviceProtocol'
 
 const logger = log('server')
 
 let client: Client
+
+interface DeviceRequestMap {
+  getVersion: {
+    params: Record<string, never>
+    result: { version: string; protocolVersion: number }
+  }
+  shutdown: {
+    params: Record<string, never>
+    result: { ok: boolean }
+  }
+  getPackageInfos: {
+    params: { packageNames: string[] }
+    result: { packageInfos: IPackageInfo[] }
+  }
+  startFileServer: {
+    params: Record<string, never>
+    result: { port: number; token: string }
+  }
+  isFileServerRunning: {
+    params: Record<string, never>
+    result: { running: boolean }
+  }
+  allowFile: {
+    params: { path: string; token: string }
+    result: { allowed: boolean }
+  }
+}
+
+type DeviceMethod = keyof DeviceRequestMap
+type DeviceParams<M extends DeviceMethod> = DeviceRequestMap[M]['params']
+type DeviceResult<M extends DeviceMethod> = DeviceRequestMap[M]['result']
+
+const REQUEST_TIMEOUTS: Partial<Record<DeviceMethod, number>> = {
+  getVersion: 5000,
+  getPackageInfos: 30000,
+  startFileServer: 15000,
+}
+const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
 // 设备服务连接
@@ -29,9 +73,15 @@ class DeviceClient {
   private socket: any = null
   private buf: Buffer = Buffer.alloc(0)
   private connecting: Promise<void> | null = null
+  private verifying: Promise<void> | null = null
+  private verified = false
   private pending = new Map<
     string,
-    { resolve: (value?: any) => void; reject: (error: any) => void; timer: any }
+    {
+      resolve: (value: unknown) => void
+      reject: (error: unknown) => void
+      timer: ReturnType<typeof setTimeout>
+    }
   >()
 
   constructor(deviceId: string) {
@@ -39,7 +89,7 @@ class DeviceClient {
   }
 
   async warm() {
-    await this.ensureConnected()
+    await this.ensureReady()
   }
 
   /** 建连去重：prewarm 和业务请求同时到达时只建一条 socket。 */
@@ -53,27 +103,71 @@ class DeviceClient {
     return this.connecting
   }
 
-  async sendMessage(method: string, params: Record<string, any> = {}) {
-    await this.ensureConnected()
+  async sendMessage<M extends DeviceMethod>(
+    method: M,
+    params: DeviceParams<M>,
+  ): Promise<DeviceResult<M>> {
+    await this.ensureReady()
+    return this.request(method, params)
+  }
+
+  private request<M extends DeviceMethod>(
+    method: M,
+    params: DeviceParams<M>,
+    timeoutMs = REQUEST_TIMEOUTS[method] || 10000,
+  ): Promise<DeviceResult<M>> {
     if (!this.socket) throw new Error('设备服务未连接：' + this.deviceId)
 
-    const id = uuid()
+    const id = randomUUID()
     this.socket.write(
       wire.com.devicedock.server.Request.encodeDelimited({
         id,
         method,
         params: JSON.stringify(params),
-      }).finish()
+      }).finish(),
     )
 
     // 设备端不回包时不能把 IPC 永久挂住
-    return new Promise<any>((resolve, reject) => {
+    return new Promise<DeviceResult<M>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error('设备服务响应超时: ' + method))
-      }, 10000)
-      this.pending.set(id, { resolve, reject, timer })
+      }, timeoutMs)
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as DeviceResult<M>),
+        reject,
+        timer,
+      })
     })
+  }
+
+  private async ensureReady() {
+    await this.ensureConnected()
+    if (this.verified && this.socket) return
+    if (this.verifying) return this.verifying
+
+    this.verifying = (async () => {
+      let info: DeviceRequestMap['getVersion']['result'] | null = null
+      try {
+        info = await this.request('getVersion', {})
+      } catch (e) {
+        logger.warn('device service version probe failed', e)
+      }
+      if (isDeviceServerCompatible(info, pkg.version)) {
+        this.verified = true
+        return
+      }
+      await this.restart(
+        info
+          ? `版本不匹配 desktop=${pkg.version} device=${String(
+              info.version,
+            )} protocol=${String(info.protocolVersion)}`
+          : '无法读取设备服务版本',
+      )
+    })().finally(() => {
+      this.verifying = null
+    })
+    return this.verifying
   }
 
   private handleFrame(message: any) {
@@ -114,6 +208,11 @@ class DeviceClient {
         }
       } while (byte & 0x80)
 
+      if (len < 0 || len > MAX_FRAME_BYTES) {
+        logger.error(`设备服务响应帧异常: ${len} bytes`)
+        this.dispose()
+        return
+      }
       if (this.buf.length - pos < len) return // 包体还没收全
       const body = this.buf.subarray(pos, pos + len)
       this.buf = this.buf.subarray(pos + len)
@@ -136,6 +235,7 @@ class DeviceClient {
 
   dispose() {
     this.failAllPending(new Error('设备已移除'))
+    this.verified = false
     try {
       this.socket?.destroy?.()
     } catch {
@@ -164,6 +264,7 @@ class DeviceClient {
         logger.error('设备服务连接错误', e)
         if (this.socket === socket) {
           this.socket = null
+          this.verified = false
           this.buf = Buffer.alloc(0)
           this.failAllPending(e || new Error('设备服务连接错误'))
         }
@@ -171,6 +272,7 @@ class DeviceClient {
       socket.on('end', () => {
         if (this.socket === socket) {
           this.socket = null
+          this.verified = false
           this.buf = Buffer.alloc(0)
           this.failAllPending(new Error('设备服务连接已关闭'))
         }
@@ -191,6 +293,41 @@ class DeviceClient {
     }
   }
 
+  private async restart(reason: string) {
+    logger.warn(`restart device service: ${reason}`)
+    let graceful = false
+    try {
+      await this.request('shutdown', {}, 2000)
+      graceful = true
+    } catch {
+      // 4.0.2 及更早的设备端没有 shutdown，下面按进程名兜底
+    }
+    this.dispose()
+
+    if (!graceful) await new Promise((resolve) => setTimeout(resolve, 100))
+    await shell(
+      this.deviceId,
+      `for p in /proc/[0-9]*; do pid=$(basename "$p"); [ "$pid" = "$$" ] && continue; cmd=$(tr '\\000' ' ' < "$p/cmdline" 2>/dev/null); case "$cmd" in *app_process*com.devicedock.server.Server*) kill -9 "$pid" 2>/dev/null;; esac; done; sleep 0.3`,
+      10000,
+    ).catch(() => undefined)
+
+    await this.push()
+    await this.start()
+    await waitUntil(this.isRunning, 10000, 100)
+    await this.connect(false)
+
+    const info = await this.request('getVersion', {})
+    if (!isDeviceServerCompatible(info, pkg.version)) {
+      this.dispose()
+      throw new Error(
+        `设备服务重启后版本仍不匹配：desktop=${pkg.version} device=${String(
+          info.version,
+        )} protocol=${String(info.protocolVersion)}`,
+      )
+    }
+    this.verified = true
+  }
+
   /** 每次都实际检查：服务刚启动时第一次检查可能还是 false，不能永久缓存。 */
   private isRunning = async (): Promise<boolean> => {
     const out: string = await shell(this.deviceId, 'cat /proc/net/unix')
@@ -205,7 +342,7 @@ class DeviceClient {
     const device = client.getDevice(this.deviceId)
     await device.push(
       resolveResources('devicedock.dex'),
-      '/data/local/tmp/devicedock/devicedock.dex'
+      '/data/local/tmp/devicedock/devicedock.dex',
     )
   }
 
@@ -213,7 +350,7 @@ class DeviceClient {
     logger.info('start')
     const device = client.getDevice(this.deviceId)
     const stream: any = await device.shell(
-      'CLASSPATH=/data/local/tmp/devicedock/devicedock.dex app_process /system/bin com.devicedock.server.Server'
+      'CLASSPATH=/data/local/tmp/devicedock/devicedock.dex app_process /system/bin com.devicedock.server.Server',
     )
     // 这条连接只用来拉起 server：挂空 error 监听并消费数据，
     // 避免 adbkit 的 stream 报未处理 error 把主进程带走
@@ -236,8 +373,27 @@ async function getDeviceClient(deviceId: string): Promise<DeviceClient> {
 // ---------------------------------------------------------------------------
 
 /** 应用名/图标只跟「包 + versionCode」有关；升级/新装由 clearPackageCaches 失效。 */
-const pkgInfoCache = new Map<string, { ver: string; info: IPackageInfo }>()
-const verCache = new Map<string, { at: number; map: Map<string, string> | null }>()
+const pkgInfoCache = new LruCache<string, { ver: string; info: IPackageInfo }>({
+  maxEntries: 2000,
+})
+const verCache = new Map<
+  string,
+  { at: number; map: Map<string, string> | null }
+>()
+interface IHostPackageMeta {
+  apkPath: string
+  versionCode: string
+}
+const hostMetaCache = new Map<
+  string,
+  { at: number; map: Map<string, IHostPackageMeta> | null }
+>()
+const hostMetaPending = new Map<
+  string,
+  Promise<Map<string, IHostPackageMeta> | null>
+>()
+const HOST_META_TTL = 5 * 60 * 1000
+const HOST_META_FAILURE_TTL = 10 * 1000
 
 export async function prewarm(deviceId: string) {
   try {
@@ -250,14 +406,59 @@ export async function prewarm(deviceId: string) {
 
 export function clearPackageCaches(deviceId: string) {
   verCache.delete(deviceId)
+  hostMetaCache.delete(deviceId)
   const prefix = deviceId + '|'
   for (const key of [...pkgInfoCache.keys()]) {
     if (key.startsWith(prefix)) pkgInfoCache.delete(key)
   }
 }
 
+/**
+ * 一次取回所有包的 APK 路径和版本号。
+ * 这是设备端 dex 失败时的兜底，避免应用列表少项、导出按钮拿到空路径。
+ */
+async function getHostPackageMeta(
+  deviceId: string,
+): Promise<Map<string, IHostPackageMeta> | null> {
+  const cached = hostMetaCache.get(deviceId)
+  if (cached) {
+    const ttl = cached.map ? HOST_META_TTL : HOST_META_FAILURE_TTL
+    if (Date.now() - cached.at < ttl) return cached.map
+  }
+
+  const running = hostMetaPending.get(deviceId)
+  if (running) return running
+
+  const task = (async () => {
+    let map: Map<string, IHostPackageMeta> | null = null
+    for (const command of [
+      'pm list packages -f --show-versioncode',
+      'pm list packages -f',
+    ]) {
+      try {
+        const entries = parsePackageListing(await shell(deviceId, command))
+        if (!entries.length) continue
+        map = new Map(
+          entries.map((entry) => [
+            entry.name,
+            { apkPath: entry.path, versionCode: entry.versionCode },
+          ]),
+        )
+        break
+      } catch {
+        // Huawei/旧固件可能不认识组合选项：继续尝试不带版本号的格式
+      }
+    }
+    hostMetaCache.set(deviceId, { at: Date.now(), map })
+    return map
+  })().finally(() => hostMetaPending.delete(deviceId))
+
+  hostMetaPending.set(deviceId, task)
+  return task
+}
+
 async function getPackageVersions(
-  deviceId: string
+  deviceId: string,
 ): Promise<Map<string, string> | null> {
   const cached = verCache.get(deviceId)
   // 应用很少变；装/卸/升级主动失效，这里放宽到 5 分钟
@@ -265,16 +466,14 @@ async function getPackageVersions(
 
   let map: Map<string, string> | null = null
   try {
-    const out = await shell(deviceId, 'pm list packages --show-versioncode')
+    const metadata = await getHostPackageMeta(deviceId)
     const parsed = new Map<string, string>()
-    for (const line of String(out).split('\n')) {
-      const matched = line.match(/^package:(\S+)(?:\s+versionCode:(\d+))?/)
-      if (!matched) continue
-      parsed.set(matched[1], matched[2] || '')
+    for (const [name, entry] of metadata || []) {
+      parsed.set(name, entry.versionCode)
     }
     // 老系统不支持 --show-versioncode：拿不到版本号就停用缓存，
     // 否则升级后图标/名字永远不更新
-    map = [...parsed.values()].some((value) => value) ? parsed : null
+    map = [...parsed.values()].some(Boolean) ? parsed : null
   } catch {
     map = null
   }
@@ -283,7 +482,7 @@ async function getPackageVersions(
   // 版本号变了的包：清掉旧信息，下次重新问 dex
   if (map) {
     const prefix = deviceId + '|'
-    for (const [key, entry] of pkgInfoCache) {
+    for (const [key, entry] of pkgInfoCache.entries()) {
       if (!key.startsWith(prefix)) continue
       const version = map.get(key.slice(prefix.length))
       if (version === undefined || version !== entry.ver) {
@@ -296,9 +495,9 @@ async function getPackageVersions(
 
 const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   const versions = await getPackageVersions(deviceId)
-  const result: Array<IPackageInfo | null> = new Array(packageNames.length).fill(
-    null
-  )
+  const result: Array<IPackageInfo | null> = new Array(
+    packageNames.length,
+  ).fill(null)
   const misses: string[] = []
   const missIndexes: number[] = []
 
@@ -318,30 +517,68 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   }
 
   if (misses.length) {
-    const deviceClient = await getDeviceClient(deviceId)
-    const { packageInfos } = await deviceClient.sendMessage(
-      'getPackageInfos',
-      { packageNames: misses }
-    )
-    const fetched: IPackageInfo[] = packageInfos || []
-
-    const indexesByName = new Map<string, number[]>()
-    for (let j = 0; j < misses.length; j++) {
-      const list = indexesByName.get(misses[j]) || []
-      list.push(missIndexes[j])
-      indexesByName.set(misses[j], list)
+    const [deviceClient, hostMeta] = await Promise.all([
+      getDeviceClient(deviceId),
+      getHostPackageMeta(deviceId).catch(() => null),
+    ])
+    let fetched: IPackageInfo[] = []
+    try {
+      const response = await deviceClient.sendMessage('getPackageInfos', {
+        packageNames: misses,
+      })
+      fetched = response.packageInfos || []
+    } catch (e) {
+      // dex 在 Huawei/老 ART 上可能整体不可用；有 pm 兜底时仍应显示完整列表
+      logger.warn('getPackageInfos dex failed, using pm fallback', e)
     }
 
+    const fetchedByName = new Map<string, IPackageInfo>()
     for (const info of fetched) {
-      if (!info || !info.packageName) continue
-      if (versions) {
-        pkgInfoCache.set(`${deviceId}|${info.packageName}`, {
-          ver: versions.get(info.packageName) || '',
-          info: { ...info },
-        })
+      if (info?.packageName) fetchedByName.set(info.packageName, info)
+    }
+
+    for (let j = 0; j < misses.length; j++) {
+      const pkg = misses[j]
+      const info = fetchedByName.get(pkg)
+      const meta = hostMeta?.get(pkg)
+      const apkPath =
+        (typeof info?.apkPath === 'string' && info.apkPath) ||
+        meta?.apkPath ||
+        ''
+      const system = /^\/(?:system|system_ext|vendor|product|odm|apex)\//.test(
+        apkPath,
+      )
+      const normalized: IPackageInfo = {
+        packageName: pkg,
+        label: typeof info?.label === 'string' && info.label ? info.label : pkg,
+        icon: typeof info?.icon === 'string' ? info.icon : '',
+        enabled: info?.enabled !== false,
+        versionName:
+          typeof info?.versionName === 'string' ? info.versionName : '',
+        apkPath,
+        apkSize: Number(info?.apkSize) || 0,
+        system: typeof info?.system === 'boolean' ? info.system : system,
+        firstInstallTime: Number(info?.firstInstallTime) || 0,
+        lastUpdateTime: Number(info?.lastUpdateTime) || 0,
+        minSdkVersion: Number.isFinite(Number(info?.minSdkVersion))
+          ? Number(info?.minSdkVersion)
+          : undefined,
+        targetSdkVersion: Number.isFinite(Number(info?.targetSdkVersion))
+          ? Number(info?.targetSdkVersion)
+          : undefined,
+        dataSize: Number(info?.dataSize) || 0,
+        cacheSize: Number(info?.cacheSize) || 0,
+        appSize: Number(info?.appSize) || 0,
+        signatures: Array.isArray(info?.signatures) ? info.signatures : [],
       }
-      for (const index of indexesByName.get(info.packageName) || []) {
-        result[index] = { ...info }
+      result[missIndexes[j]] = normalized
+
+      // 只缓存 dex 完整结果；纯 pm 兜底下次仍会重试，避免 dex 恢复后永远缺图标/名称
+      if (info && versions) {
+        pkgInfoCache.set(`${deviceId}|${pkg}`, {
+          ver: versions.get(pkg) || '',
+          info: { ...normalized },
+        })
       }
     }
   }
@@ -350,16 +587,16 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   if (!list.length) return list
 
   // 图标是设备端文件服务的 URL：先拿一次端口，整批复用
-  let serverPort: number | undefined
+  let serverInfo: FileServerInfo | undefined
   try {
-    serverPort = await getFileServerPort(deviceId)
+    serverInfo = await getFileServerInfo(deviceId)
   } catch (e) {
     logger.warn('file server unavailable', e)
   }
-  if (serverPort) {
+  if (serverInfo) {
     for (const info of list) {
       if (info.icon) {
-        info.icon = `http://127.0.0.1:${serverPort}${encodeURI(info.icon)}`
+        info.icon = fileServerUrl(serverInfo, info.icon)
       }
     }
   }
@@ -384,7 +621,10 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   return list
 }
 
-const diskStatsCache = new Map<string, { at: number; stats: Record<string, any> }>()
+const diskStatsCache = new Map<
+  string,
+  { at: number; stats: Record<string, any> }
+>()
 const DISK_STATS_TTL = 10 * 1000
 
 async function getPackageDiskStats(deviceId: string) {
@@ -392,7 +632,10 @@ async function getPackageDiskStats(deviceId: string) {
   if (cached && Date.now() - cached.at < DISK_STATS_TTL) return cached.stats
 
   const out = String(await shell(deviceId, 'dumpsys diskstats'))
-  const stats: Record<string, { appSize: number; dataSize: number; cacheSize: number }> = {}
+  const stats: Record<
+    string,
+    { appSize: number; dataSize: number; cacheSize: number }
+  > = {}
 
   const names: string[] = []
   const appSizes: string[] = []
@@ -431,7 +674,12 @@ async function getPackageDiskStats(deviceId: string) {
 // ---------------------------------------------------------------------------
 
 /** 成功才缓存端口：失败不能缓存 rejection，否则这台设备永远起不来文件服务。 */
-const fileServerPorts = new Map<string, number>()
+interface FileServerInfo {
+  port: number
+  token: string
+}
+
+const fileServerPorts = new Map<string, FileServerInfo>()
 
 /**
  * adb kill-server 会把所有 TCP forward 清掉，但设备端的 app_process 还活着，
@@ -443,12 +691,21 @@ export function resetTransportCaches() {
   diskStatsCache.clear()
 }
 
-async function getFileServerPort(deviceId: string): Promise<number> {
+function fileServerUrl(info: FileServerInfo, path: string) {
+  return `http://127.0.0.1:${info.port}${encodeDevicePath(path)}?token=${encodeURIComponent(
+    info.token,
+  )}`
+}
+
+async function getFileServerInfo(deviceId: string): Promise<FileServerInfo> {
   const cached = fileServerPorts.get(deviceId)
   if (cached) {
     try {
       const deviceClient = await getDeviceClient(deviceId)
-      const { running } = await deviceClient.sendMessage('isFileServerRunning')
+      const { running } = await deviceClient.sendMessage(
+        'isFileServerRunning',
+        {},
+      )
       if (running) return cached
     } catch {
       // 服务已经挂了：下面重新起
@@ -457,15 +714,28 @@ async function getFileServerPort(deviceId: string): Promise<number> {
   }
 
   const deviceClient = await getDeviceClient(deviceId)
-  const result = await deviceClient.sendMessage('startFileServer')
+  const result = await deviceClient.sendMessage('startFileServer', {})
+  const token = String(result.token || '')
+  const remotePort = Number(result.port)
+  if (!token || !Number.isInteger(remotePort) || remotePort <= 0) {
+    throw new Error('设备文件服务启动结果无效')
+  }
   const port = await forwardTcp(deviceId, `tcp:${result.port}`)
-  fileServerPorts.set(deviceId, port)
-  return port
+  const info = { port, token }
+  fileServerPorts.set(deviceId, info)
+  return info
 }
 
-const getFileUrl: IpcGetFileUrl = async (deviceId, path, port) => {
-  const actualPort = port || (await getFileServerPort(deviceId))
-  return `http://127.0.0.1:${actualPort}${encodeURI(path)}`
+const getFileUrl: IpcGetFileUrl = async (deviceId, path) => {
+  path = normalizeDevicePath(path)
+  const info = await getFileServerInfo(deviceId)
+  const deviceClient = await getDeviceClient(deviceId)
+  const result = await deviceClient.sendMessage('allowFile', {
+    path,
+    token: info.token,
+  })
+  if (!result.allowed) throw new Error('设备拒绝预览该文件')
+  return fileServerUrl(info, path)
 }
 
 export async function init(c: Client) {

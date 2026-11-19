@@ -2,7 +2,7 @@
  * 应用页：列表/图标两种视图，支持搜索、拖放安装、导出 APK、启停/卸载/清数据。
  *
  * 两个性能点：
- * - 包信息按 50 个一组、4 路并发向设备端的 dex 取（600 包的机器原来是十几秒）；
+ * - 包信息按 100 个一组顺序取；单条设备 socket 在 dex 端本身也是串行处理；
  * - 分块结果按 250ms 节流上屏，边到边显示，全部完成后顺序与分组一致。
  */
 import LunaIconList from 'luna-icon-list/react'
@@ -19,7 +19,6 @@ import { notify, isFileDrop } from 'share/renderer/lib/util'
 import { t } from 'common/util'
 import className from 'licia/className'
 import endWith from 'licia/endWith'
-import chunk from 'licia/chunk'
 import LunaModal from 'luna-modal'
 import PackageInfoModal from './PackageInfoModal'
 import { IPackageInfo } from 'common/types'
@@ -39,42 +38,8 @@ import PageToolbar, {
   ToolSpace,
   ToolText,
 } from '../layout/PageToolbar'
-
-const CHUNK_SIZE = 50
-const CONCURRENCY = 4
-const PAINT_INTERVAL = 250
-
-function iconEntry(info: IPackageInfo) {
-  const style: any = { borderRadius: '20%' }
-  if (!info.enabled) style.filter = 'grayscale(100%)'
-
-  return {
-    info,
-    src: info.icon || fallbackIcon(info.label, info.packageName),
-    name: info.label,
-    style,
-  }
-}
-
-/** dex 起不来时（老 ART、目录缺失）至少把包名和默认图标列出来，别让整页空白。 */
-function placeholderInfo(packageName: string, system: boolean): IPackageInfo {
-  return {
-    packageName,
-    label: packageName,
-    icon: '',
-    enabled: true,
-    versionName: '',
-    apkPath: '',
-    apkSize: 0,
-    system,
-    firstInstallTime: 0,
-    lastUpdateTime: 0,
-    dataSize: 0,
-    cacheSize: 0,
-    appSize: 0,
-    signatures: [],
-  }
-}
+import { iconEntry } from './applicationModel'
+import { useApplicationPackages } from './useApplicationPackages'
 
 function sizeCmp(a: string, b: string) {
   // 显示是 "123 MB" 字符串，排序必须按字节比
@@ -85,7 +50,12 @@ const columns = [
   { id: 'label', title: t('name'), sortable: true, weight: 20 },
   { id: 'packageName', title: t('package'), sortable: true, weight: 25 },
   { id: 'versionName', title: t('version'), sortable: true, weight: 10 },
-  { id: 'minSdkVersion', title: t('minSdkVersion'), sortable: true, weight: 10 },
+  {
+    id: 'minSdkVersion',
+    title: t('minSdkVersion'),
+    sortable: true,
+    weight: 10,
+  },
   {
     id: 'targetSdkVersion',
     title: t('targetSdkVersion'),
@@ -142,9 +112,7 @@ const columns = [
 ]
 
 export default observer(function Application() {
-  const [isLoading, setIsLoading] = useState(false)
   const [packageInfo, setPackageInfo] = useState<IPackageInfo | null>(null)
-  const [packageInfos, setPackageInfos] = useState<IPackageInfo[]>([])
   const [filter, setFilter] = useState('')
   // 与文件页一致：单击只选中，双击才是打开；详情走工具栏/右键
   const [selectedPackage, setSelectedPackage] = useState('')
@@ -159,128 +127,15 @@ export default observer(function Application() {
 
   const dataGridRef = useRef<DataGrid>(null)
   const dragging = useRef(0)
-  const iconsRef = useRef<any[]>([])
   const iconTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  // 设备切得快时旧请求可能后到：每次刷新递增序号，回包不是最新就丢弃
-  const loadSeq = useRef(0)
-  // 每个包自己的刷新序号：全量序号对同一个包的两次刷新是同一个值
-  const pkgSeq = useRef(new Map<string, number>())
 
   const { device } = store
+  const { isLoading, packageInfos, refresh, updatePackageIcon } =
+    useApplicationPackages(device?.id, device?.type)
+  const icons = useMemo(() => packageInfos.map(iconEntry), [packageInfos])
 
-  useEffect(() => {
-    refresh()
-  }, [device?.id, device?.type])
   useWindowResize(() => dataGridRef.current?.fit())
   useEffect(() => () => clearTimeout(iconTimer.current), [])
-
-  async function refresh(packageName?: string) {
-    if (!device) return
-    const deviceId = device.id
-
-    if (!packageName) {
-      // ---------- 全量刷新 ----------
-      const seq = ++loadSeq.current
-      setPackageInfos([])
-      setIsLoading(true)
-
-      try {
-        const packages = await main.getPackages(
-          deviceId,
-          store.application.sysPackage
-        )
-        if (seq !== loadSeq.current) return
-
-        const chunks = chunk(packages, CHUNK_SIZE)
-        const parts: any[][] = new Array(chunks.length)
-        let next = 0
-        let done = 0
-        let lastPaint = 0
-
-        // 每块都 setState 会让 600 包反复重建几百行 DOM，节流到 250ms
-        const paint = (force: boolean) => {
-          if (seq !== loadSeq.current) return
-
-          const now = Date.now()
-          if (force || now - lastPaint >= PAINT_INTERVAL) {
-            lastPaint = now
-            setPackageInfos(parts.filter(Boolean).flat())
-          }
-        }
-
-        const worker = async () => {
-          for (;;) {
-            const index = next++
-            if (index >= chunks.length) return
-
-            // dex 挂了也别整页空白：退回「包名 + 默认图标」，至少能操作
-            parts[index] = await main
-              .getPackageInfos(deviceId, chunks[index])
-              .catch(() =>
-                chunks[index].map((name) =>
-                  placeholderInfo(name, store.application.sysPackage)
-                )
-              )
-
-            done++
-            paint(done === chunks.length)
-          }
-        }
-
-        await Promise.all(
-          Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, worker)
-        )
-        if (seq !== loadSeq.current) return
-
-        const all = parts.filter(Boolean).flat()
-        setPackageInfos(all)
-        // 图标数组整轮只建一次：原来每个分块都重算全部包，600 包时是 O(n²)
-        iconsRef.current = all.map(iconEntry)
-      } catch (e: any) {
-        // 设备掉线/超时：不提示的话界面一片空白，分不清「真没装应用」
-        notify(t('appListFailed') + (e?.message || e), { icon: 'error' })
-      } finally {
-        if (seq === loadSeq.current) setIsLoading(false)
-      }
-      return
-    }
-
-    // ---------- 单包刷新（启停/清数据后） ----------
-    // 全量序号拦不住同一个包的两次刷新（同一个 seq），
-    // 快速「停用→启用」时旧回包可能覆盖新状态，这里加按包独立序号
-    const mySeq = (pkgSeq.current.get(packageName) ?? 0) + 1
-    pkgSeq.current.set(packageName, mySeq)
-    const seq = loadSeq.current
-    try {
-      const infos = await main.getPackageInfos(deviceId, [packageName])
-      if (
-        seq !== loadSeq.current ||
-        pkgSeq.current.get(packageName) !== mySeq ||
-        store.device?.id !== deviceId
-      ) {
-        return
-      }
-
-      const info = infos[0]
-      // 包在查询间隙被卸载时 infos 为空，不能拿 undefined 去读 enabled
-      if (!info) return
-
-      // 全量刷新可能在这期间替换了列表：函数式更新，别拿旧闭包数组覆盖新结果
-      setPackageInfos((prev) => {
-        const index = prev.findIndex((item) => item.packageName === packageName)
-        if (index === -1) return prev
-
-        const next = prev.slice()
-        next[index] = info
-        return next
-      })
-      iconsRef.current = iconsRef.current.map((icon) =>
-        icon.info.packageName === packageName ? iconEntry(info) : icon
-      )
-    } catch {
-      // 设备掉线/超时：静默保留旧数据，下次刷新再试
-    }
-  }
 
   async function onDrop(e: React.DragEvent) {
     e.preventDefault()
@@ -314,33 +169,24 @@ export default observer(function Application() {
       if (!dev) return
 
       if (
-        iconsRef.current.some(
-          (item) => item.info.packageName === packageName && item.info.icon
+        packageInfos.some(
+          (item) => item.packageName === packageName && item.icon,
         )
       ) {
         return
       }
 
-      const icon = await main.getPackageIcon(dev.id, packageName).catch(() => '')
+      const icon = await main
+        .getPackageIcon(dev.id, packageName)
+        .catch(() => '')
       if (!icon) return
 
-      setPackageInfos((list) =>
-        list.map((info) =>
-          info.packageName === packageName ? { ...info, icon } : info
-        )
-      )
-      iconsRef.current = iconsRef.current.map((item) =>
-        item.info.packageName === packageName
-          ? iconEntry({ ...item.info, icon })
-          : item
-      )
+      updatePackageIcon(packageName, icon)
     }, 600)
   }
 
   function showInfo(packageName: string) {
-    const found = packageInfos.find(
-      (info) => info.packageName === packageName
-    )
+    const found = packageInfos.find((info) => info.packageName === packageName)
     if (!found) return
 
     setPackageInfo(found)
@@ -374,16 +220,31 @@ export default observer(function Application() {
       {
         label: t('exportApk'),
         click: async () => {
-          const { canceled, filePath } = await main.showSaveDialog({
-            defaultPath: `${info.packageName}-${info.versionName}.apk`,
-          })
-          if (canceled) return
+          try {
+            const version = info.versionName ? `-${info.versionName}` : ''
+            const { canceled, filePath } = await main.showSaveDialog({
+              defaultPath: `${info.packageName}${version}.apk`,
+            })
+            if (canceled) return
 
-          await main.pullFile(current.id, info.apkPath, filePath)
-          notify(t('apkExported', { path: filePath }), {
-            icon: 'success',
-            duration: 5000,
-          })
+            const apkPath =
+              info.apkPath ||
+              (await main.getPackageApkPath(current.id, info.packageName))
+            if (!apkPath) throw new Error(t('apkPathUnavailable'))
+
+            // 保存框已经确认过覆盖，pullFile 默认不覆盖会让二次导出失败
+            await main.pullFile(current.id, apkPath, filePath, {
+              overwrite: true,
+            })
+            notify(t('apkExported', { path: filePath }), {
+              icon: 'success',
+              duration: 5000,
+            })
+          } catch (e: any) {
+            notify(t('apkExportFailed') + (e?.message || e), {
+              icon: 'error',
+            })
+          }
         },
       },
       { type: 'separator' },
@@ -395,7 +256,7 @@ export default observer(function Application() {
         label: t('stop'),
         click: async () => {
           const ok = await LunaModal.confirm(
-            confirmText('stopPackageConfirm', info)
+            confirmText('stopPackageConfirm', info),
           )
           if (ok) await main.stopPackage(current.id, info.packageName)
         },
@@ -405,7 +266,7 @@ export default observer(function Application() {
         label: t('disablePackage'),
         click: async () => {
           const ok = await LunaModal.confirm(
-            confirmText('disablePackageConfirm', info)
+            confirmText('disablePackageConfirm', info),
           )
           if (!ok) return
 
@@ -425,7 +286,7 @@ export default observer(function Application() {
         label: t('clearData'),
         click: async () => {
           const ok = await LunaModal.confirm(
-            confirmText('clearDataConfirm', info)
+            confirmText('clearDataConfirm', info),
           )
           if (!ok) return
 
@@ -439,7 +300,7 @@ export default observer(function Application() {
         label: t('uninstall'),
         click: async () => {
           const ok = await LunaModal.confirm(
-            confirmText('uninstallConfirm', info)
+            confirmText('uninstallConfirm', info),
           )
           if (!ok) return
 
@@ -472,7 +333,7 @@ export default observer(function Application() {
             minSdkVersion: info.minSdkVersion,
             targetSdkVersion: info.targetSdkVersion,
             storageUsage: fileSize(
-              info.appSize + info.dataSize + info.cacheSize
+              info.appSize + info.dataSize + info.cacheSize,
             ),
             appSize: fileSize(info.appSize),
             dataSize: fileSize(info.dataSize),
@@ -480,15 +341,15 @@ export default observer(function Application() {
             enabled: info.enabled ? t('enabled') : t('disabled'),
             firstInstallTime: dateFormat(
               new Date(info.firstInstallTime),
-              'yyyy-mm-dd HH:MM:ss'
+              'yyyy-mm-dd HH:MM:ss',
             ),
             lastUpdateTime: dateFormat(
               new Date(info.lastUpdateTime),
-              'yyyy-mm-dd HH:MM:ss'
+              'yyyy-mm-dd HH:MM:ss',
             ),
           }))
         : [],
-    [packageInfos, store.application.listView]
+    [packageInfos, store.application.listView],
   )
 
   const applications = (
@@ -548,19 +409,24 @@ export default observer(function Application() {
               .map((item: any) => {
                 const col = byId.get(item.id)
                 return col
-                  ? { ...col, width: item.width, visible: item.visible !== false }
+                  ? {
+                      ...col,
+                      width: item.width,
+                      visible: item.visible !== false,
+                    }
                   : null
               })
               .filter(Boolean)
             for (const col of columns) {
-              if (!saved.some((item: any) => item.id === col.id)) merged.push(col)
+              if (!saved.some((item: any) => item.id === col.id))
+                merged.push(col)
             }
             dataGrid.setOption('columns', merged)
           }}
         />
       ) : (
         <LunaIconList
-          icons={iconsRef.current}
+          icons={icons}
           size={store.application.itemSize}
           filter={filter}
           onClick={(e: any, icon) => {
@@ -637,7 +503,7 @@ export default observer(function Application() {
           onClick={() =>
             store.application.set(
               'itemSize',
-              Math.round(store.application.itemSize * 1.2)
+              Math.round(store.application.itemSize * 1.2),
             )
           }
         />
@@ -652,7 +518,7 @@ export default observer(function Application() {
           onClick={() =>
             store.application.set(
               'itemSize',
-              Math.round(store.application.itemSize * 0.8)
+              Math.round(store.application.itemSize * 0.8),
             )
           }
         />

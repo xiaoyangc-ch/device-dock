@@ -10,6 +10,7 @@ import LunaNotification, { INotifyOptions } from 'luna-notification'
 // LunaNotification 内部用 innerHTML 渲染 content（webSecurity:false 下等于 XSS），
 // content 里经常拼设备名/包名/路径，必须转义
 import { escapeHtml } from 'common/html'
+import { t } from '../../common/i18n'
 
 let notification: LunaNotification | null = null
 
@@ -36,9 +37,13 @@ export function isFileDrop(e: React.DragEvent) {
 
 export function copyData(buf: any, mime: string) {
   const data = isArrBuffer(buf) ? buf : convertBin(buf, 'ArrayBuffer')
-  navigator.clipboard.write([
-    new ClipboardItem({
-      [mime]: new Blob([data], { type: mime }),
-    }),
-  ])
+  navigator.clipboard
+    .write([
+      new ClipboardItem({
+        [mime]: new Blob([data], { type: mime }),
+      }),
+    ])
+    .catch(() => {
+      notify(t('commonErr'), { icon: 'error' })
+    })
 }

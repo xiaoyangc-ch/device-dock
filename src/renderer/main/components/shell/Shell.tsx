@@ -8,7 +8,6 @@ import { t } from 'common/util'
 import store from '../../store'
 import Style from './Shell.module.scss'
 import { useEffect, useRef, useState } from 'react'
-import uuid from 'licia/uuid'
 import LunaCommandPalette from 'luna-command-palette/react'
 import truncate from 'licia/truncate'
 import { Terminal } from '@xterm/xterm'
@@ -62,7 +61,7 @@ export default observer(function Shell() {
 
   function add() {
     const shell: IShell = {
-      id: uuid(),
+      id: crypto.randomUUID(),
       name: `${t('shell')} ${numRef.current++}`,
       sessionId: '',
     }
@@ -89,7 +88,7 @@ export default observer(function Shell() {
 
     const nextIndex = Math.min(
       closedIndex >= 0 ? closedIndex : 0,
-      remaining.length - 1
+      remaining.length - 1,
     )
     setSelected(remaining[Math.max(0, nextIndex)])
   }

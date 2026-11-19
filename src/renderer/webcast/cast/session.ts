@@ -22,6 +22,13 @@ import { SocketStream, stripCompatByte } from './transport'
 
 export type SessionState = 'idle' | 'connecting' | 'live' | 'failed'
 
+export class AudioUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AudioUnavailableError'
+  }
+}
+
 export interface CastConfig {
   bitRate: number
   maxSize: number
@@ -138,7 +145,13 @@ export class CastSession {
     // scrcpy 开了 audio 后，同一个 forward 端口会按 video → audio → control
     // 的顺序 accept；音频必须插在 control 前面，否则控制通道会收到音频流。
     if (config.audio) {
-      this.audio = await this.openAudio(reverse.port)
+      try {
+        this.audio = await this.openAudio(reverse.port)
+      } catch (e: any) {
+        throw new AudioUnavailableError(
+          e?.message || '设备音频通道不可用'
+        )
+      }
       if (this.disposed) return
     }
 
@@ -370,10 +383,18 @@ export class CastSession {
           merged.set(value, buffer.length)
           buffer = merged
         }
+        if (buffer.length > 2 * 1024 * 1024) {
+          this.fail('控制消息过大')
+          return
+        }
 
         for (;;) {
           const decoded = decodeIncoming(buffer)
-          if (!decoded) break
+          if (decoded.kind === 'incomplete') break
+          if (decoded.kind === 'unknown') {
+            buffer = decoded.rest
+            continue
+          }
 
           buffer = decoded.rest
           if (decoded.message.type === 'clipboard') {

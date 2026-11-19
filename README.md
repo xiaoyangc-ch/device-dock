@@ -2,7 +2,7 @@
 
 安卓设备管理客户端：多设备连接、投屏，以及文件 / 应用 / 进程 / 日志 / 终端等日常运维能力。
 
-完整操作说明见 [使用文档](docs/使用文档.md)，排版版见 [PDF 手册](docs/设备坞-4.0-使用手册.pdf)。
+完整操作说明见 [使用文档](docs/使用文档.md)，历史排版版见 [4.0 PDF 手册](docs/设备坞-4.0-使用手册.pdf)。
 
 4.0 起本仓库独立演进：新仓库历史、自有版本线，不再包含 APM 远程业务（账号登录、按 MAC 查设备、frpc 穿透）。连接方式只保留 USB 与局域网 ADB。
 
@@ -23,7 +23,7 @@ src/preload     预加载脚本
 src/renderer    React 界面：设备、投屏、文件、应用等页面
 src/common      主/渲染共享的解析、类型、多语言
 src/share       主/渲染共用的窗口骨架与通用页面（以内联源码形式维护）
-server          scrcpy server 的 Java 源码
+server          设备端服务、文件服务与 R8/D8 构建
 resources       adb、scrcpy.jar、dex、disktool 等随包资源
 script          构建、打包、adb、smoke 脚本
 build           图标与安装器素材
@@ -31,12 +31,17 @@ build           图标与安装器素材
 
 ## 开发
 
+需要 Node.js 22.12+；Android 设备端 dex 构建需要 JDK 17+。
+
 ```bash
 npm install --legacy-peer-deps
 npm run dev            # 主进程 / preload / 渲染三路 watch
+npm run check          # typecheck + 单测 + lint
 npm run typecheck
 npm test               # 单元测试
+npm run test:devices -- --port 9444 --deep  # 已启动 CDP 时的真机能力矩阵
 npm run lint
+npm run pack:dir       # 快速生成未压缩 .app，验证打包但不需要 DMG 工具
 ```
 
 macOS 打包（ad-hoc 签名，无需证书）：

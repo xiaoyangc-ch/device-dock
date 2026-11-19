@@ -29,6 +29,8 @@ import Transfer from './Transfer'
 import FileGrid from './FileGrid'
 import FileInspector from './FileInspector'
 import { getOverview } from '../../lib/overview'
+import { conflictName, isValidFileName } from './fileUtil'
+import { LruCache } from 'common/lru'
 
 const PAGE_SIZE = 1000
 const DIR_CACHE_TTL = 15000
@@ -88,9 +90,13 @@ export default observer(function File() {
 
   const { device, file } = store
 
-  const iconCache = useRef(new Map<string, string>()).current
+  const iconCache = useRef(
+    new LruCache<string, string>({ maxEntries: 64 }),
+  ).current
   const dirCache = useRef(
-    new Map<string, { files: IFile[]; total: number; ts: number }>(),
+    new LruCache<string, { files: IFile[]; total: number; ts: number }>({
+      maxEntries: DIR_CACHE_MAX,
+    }),
   ).current
 
   const [total, setTotal] = useState(0)
@@ -189,14 +195,6 @@ export default observer(function File() {
   }, [device ? device.id : ''])
 
   function cacheDir(cacheKey: string, files: IFile[], count: number) {
-    // 30 个目录 × 3000 条会把几十万个对象（含 data URL 图标）常驻在渲染进程。
-    // Map 的迭代顺序是插入顺序，不 delete 再 set 的话「命中」不会刷新位置，
-    // A/B 来回切时 A 会被一直当成最旧而反复淘汰（那是 FIFO 不是 LRU）
-    dirCache.delete(cacheKey)
-    if (dirCache.size >= DIR_CACHE_MAX) {
-      const oldest = dirCache.keys().next().value
-      if (oldest !== undefined) dirCache.delete(oldest)
-    }
     // 只缓存首屏一页：回退时先出列表，继续滚动再按偏移加载
     dirCache.set(cacheKey, {
       files: files.length > PAGE_SIZE ? files.slice(0, PAGE_SIZE) : files,
@@ -227,15 +225,18 @@ export default observer(function File() {
 
     if (!needIcon.size) return list
 
-    await Promise.all(
-      Array.from(needIcon).map(async (ext) => {
-        try {
-          iconCache.set(ext, await main.getFileIcon(ext))
-        } catch {
-          // 系统没有该类型图标：保持无缩略图
-        }
-      }),
-    )
+    const extensions = [...needIcon]
+    for (let i = 0; i < extensions.length; i += 6) {
+      await Promise.all(
+        extensions.slice(i, i + 6).map(async (ext) => {
+          try {
+            iconCache.set(ext, await main.getFileIcon(ext))
+          } catch {
+            // 系统没有该类型图标：保持无缩略图
+          }
+        }),
+      )
+    }
 
     return list.map((item) => {
       if (item.directory || item.thumbnail) return item
@@ -252,11 +253,6 @@ export default observer(function File() {
     const seq = ++navSeq.current
     const cacheKey = device.id + ':' + target
     const cached = dirCache.get(cacheKey)
-    if (cached) {
-      // 命中即刷新 LRU 位置
-      dirCache.delete(cacheKey)
-      dirCache.set(cacheKey, cached)
-    }
 
     if (!force && cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
       // 命中缓存也要结束 loading：上一轮可能是另一个目录还在转圈，
@@ -468,6 +464,9 @@ export default observer(function File() {
         searchLoadedRef.current = result.files.length
         setFileList(await withIcons(result.files))
 
+        if (result.partial) {
+          notify(t('fileSearchPartial'), { icon: 'info' })
+        }
         if (!result.total && !searchAll) {
           // 别让人以为搜索坏了：提示还有「全盘」这一档
           notify(t('fileSearchAllNotFound'), { icon: 'info' })
@@ -512,6 +511,10 @@ export default observer(function File() {
     if (!name) return
 
     try {
+      if (!isValidFileName(name)) {
+        notify(t('fileNameInvalid'), { icon: 'error' })
+        return
+      }
       await main.createDir(device.id, path + name)
       getFiles(path, true)
     } catch (e: any) {
@@ -527,6 +530,10 @@ export default observer(function File() {
       baseName(item),
     )
     if (!name || name === baseName(item)) return
+    if (!isValidFileName(name)) {
+      notify(t('fileNameInvalid'), { icon: 'error' })
+      return
+    }
 
     const parent = parentOf(item)
     const target = parent + name
@@ -672,11 +679,7 @@ export default observer(function File() {
   async function downloadFiles(files: IFile[]) {
     if (!device || !files.length) return
 
-    const targets = files.filter((item) => !item.directory)
-    if (!targets.length) {
-      notify(t('fileFoldersOnly'), { icon: 'info' })
-      return
-    }
+    const targets = files
 
     let dir = ''
     if (targets.length > 1 && file.lastDownloadDir) {
@@ -698,24 +701,34 @@ export default observer(function File() {
 
     for (const item of targets) {
       const base = baseName(item)
-      let dest = dir + '/' + base
-
-      // 同一批里两个文件同名（不同源目录）：后一个自动加 (1)，不静默覆盖
-      let n = 1
-      while (usedDests.has(dest)) {
-        const dot = base.lastIndexOf('.')
-        const name =
-          dot > 0
-            ? `${base.slice(0, dot)} (${n})${base.slice(dot)}`
-            : `${base} (${n})`
-        dest = dir + '/' + name
-        n++
-      }
-      usedDests.add(dest)
-
       notify(t('fileDownloading', { path: absPath(item) }), { icon: 'info' })
       try {
-        await main.pullFile(device.id, absPath(item), dest)
+        let n = 0
+        for (;;) {
+          const name = conflictName(base, n)
+          const dest = dir + '/' + name
+          if (usedDests.has(dest)) {
+            n++
+            continue
+          }
+
+          try {
+            await main.pullFile(device.id, absPath(item), dest, {
+              overwrite: false,
+            })
+            usedDests.add(dest)
+            break
+          } catch (e: any) {
+            if (
+              /EEXIST|already exists/i.test(String(e?.message || e)) &&
+              n < 500
+            ) {
+              n++
+              continue
+            }
+            throw e
+          }
+        }
         ok++
       } catch {
         // 单个失败继续：批量下载不能因为一个 0 字节文件全停
@@ -1238,7 +1251,7 @@ export default observer(function File() {
                 const input = e.currentTarget
 
                 try {
-                  const text = await navigator.clipboard.readText()
+                  const text = await main.readClipboard()
                   if (!text) return
 
                   const start = input.selectionStart ?? input.value.length

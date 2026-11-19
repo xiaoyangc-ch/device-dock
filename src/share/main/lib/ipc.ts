@@ -5,7 +5,12 @@
 import { dialog, shell, app, ipcMain, BrowserWindow, clipboard } from 'electron'
 import * as window from './window'
 import contextMenu from './contextMenu'
-import { getOpenFileFromArgv, handleEvent, resolveResources } from './util'
+import {
+  assertTrustedSender,
+  getOpenFileFromArgv,
+  handleEvent,
+  resolveResources,
+} from './util'
 import { getMemStore } from './store'
 import log from '../../common/log'
 import {
@@ -36,6 +41,18 @@ import os from 'os'
 import { getSettingsStore } from '../../../main/lib/store'
 
 const logger = log('ipc')
+
+function openSafeExternal(url: string) {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('只允许打开 http/https 链接')
+    }
+    return shell.openExternal(parsed.href)
+  } catch (e) {
+    logger.warn('reject external url', url, e)
+  }
+}
 
 // 渲染层 → 其它窗口的事件白名单（主进程内部的 sendTo 不走这条 IPC）
 const SEND_TO_WINDOW_ALLOW: Record<string, Set<string>> = {
@@ -127,7 +144,7 @@ export function init() {
   handleEvent(
     'openExternal',
     <IpcOpenExternal>((url) => {
-      shell.openExternal(url)
+      openSafeExternal(url)
     })
   )
   handleEvent('toggleDevTools', () => {
@@ -160,6 +177,7 @@ export function init() {
   })
 
   ipcMain.handle('showContextMenu', (event, x, y, template) => {
+    assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) {
       win.focus()
@@ -167,12 +185,15 @@ export function init() {
     }
   })
   ipcMain.handle('closeWin', (event) => {
+    assertTrustedSender(event)
     BrowserWindow.fromWebContents(event.sender)?.close()
   })
   ipcMain.handle('hideWin', (event) => {
+    assertTrustedSender(event)
     BrowserWindow.fromWebContents(event.sender)?.hide()
   })
   ipcMain.handle('toggleWinMaximize', (event) => {
+    assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     if (win.isMaximized()) {
@@ -182,10 +203,12 @@ export function init() {
     }
   })
   ipcMain.handle('isCustomTitlebar', (event) => {
+    assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
     return win ? (win as any).customTitlebar : true
   })
   ipcMain.handle('isTitlebarOverlay', (event) => {
+    assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
     return win ? !!(win as any).nativeTitlebarOverlay : false
   })

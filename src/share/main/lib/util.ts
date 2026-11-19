@@ -2,14 +2,15 @@
  * 主进程公共工具：资源路径、userData 路径、主题、IPC 注册。
  */
 import path from 'path'
-import types from 'licia/types'
-import { app, ipcMain, nativeTheme } from 'electron'
+import { app, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import log from '../../common/log'
 import endWith from 'licia/endWith'
 import pkg from '../../../../package.json'
 import { exec as _exec } from 'child_process'
 import { promisify } from 'util'
 import { createHash } from 'crypto'
+import { pathToFileURL } from 'node:url'
+import { isTrustedAppUrl } from 'common/appUrl'
 
 const execAsync = promisify(_exec)
 
@@ -60,23 +61,31 @@ const logger = log('handleEvent')
  */
 /** 应用自己的页面：打包/构建后都是 file://，dev server 与 devtools 在 localhost。 */
 export function isAppUrl(url: string): boolean {
-  if (!url) return false
-  if (url.startsWith('file://')) return true
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)
+  const rendererFile = pathToFileURL(
+    path.resolve(__dirname, '../renderer/index.html'),
+  ).href
+  return isTrustedAppUrl(url, rendererFile)
 }
 
-function isTrustedSender(event: any): boolean {
+function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   return isAppUrl(event?.senderFrame?.url || '')
 }
 
-export function handleEvent(channel: string, listener: types.AnyFn) {
-  ipcMain.handle(channel, (event: any, ...args) => {
-    if (!isTrustedSender(event)) {
-      logger.warn('reject ipc from untrusted sender', channel)
-      throw new Error('拒绝来自非应用页面的 IPC 调用')
-    }
+export function assertTrustedSender(event: IpcMainInvokeEvent) {
+  if (!isTrustedSender(event)) {
+    logger.warn('reject ipc from untrusted sender')
+    throw new Error('拒绝来自非应用页面的 IPC 调用')
+  }
+}
+
+export function handleEvent<Args extends unknown[], Result>(
+  channel: string,
+  listener: (...args: Args) => Result,
+) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedSender(event)
     logger.debug(channel, ...args)
-    return listener(...args)
+    return listener(...(args as Args))
   })
 }
 

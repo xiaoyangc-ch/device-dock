@@ -77,3 +77,24 @@ export function modeOf(file: IFile) {
   }
   return mode
 }
+
+/** 新建/重命名只接受单个路径段，避免把普通改名变成跨目录移动。 */
+export function isValidFileName(name: string) {
+  return (
+    name.length > 0 &&
+    name !== '.' &&
+    name !== '..' &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !name.includes('\0')
+  )
+}
+
+/** `a.txt` → `a (1).txt`；无扩展名则追加在末尾。 */
+export function conflictName(name: string, index: number) {
+  if (index <= 0) return name
+  const dot = name.lastIndexOf('.')
+  return dot > 0
+    ? `${name.slice(0, dot)} (${index})${name.slice(dot)}`
+    : `${name} (${index})`
+}

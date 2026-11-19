@@ -14,6 +14,11 @@ import log from 'share/common/log'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
 import { getAdbPath, spawnAdb } from './adb/base'
 import {
+  clearIconCache,
+  clearPackageListCache,
+} from './adb/package'
+import { clearPackageCaches } from './adb/server'
+import {
   IpcInstallWebCastApk,
   IpcReverseWebCast,
   IpcStartWebCast,
@@ -233,6 +238,11 @@ export const installApk: IpcInstallWebCastApk = async (deviceId, apkPath) => {
     ['-s', deviceId, 'install', '-r', '-t', apkPath],
     180000
   )
+  if (result.code === 0) {
+    clearPackageListCache(deviceId)
+    clearIconCache(deviceId)
+    clearPackageCaches(deviceId)
+  }
   return {
     ok: result.code === 0,
     message: (result.stdout || result.stderr || '').trim(),

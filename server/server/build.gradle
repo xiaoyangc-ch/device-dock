@@ -17,10 +17,17 @@ android {
     def pkgFilePath = "$rootDir/../package.json"
     def pkgFile = new File(pkgFilePath)
     def pkgJson = new groovy.json.JsonSlurper().parseText(pkgFile.text)
+    def versionMatch = (pkgJson.version =~ /^(\d+)\.(\d+)\.(\d+)/)
+    if (!versionMatch.find()) {
+        throw new GradleException("package.json version must start with major.minor.patch")
+    }
+    def appVersionCode = versionMatch.group(1).toInteger() * 10000 +
+        versionMatch.group(2).toInteger() * 100 +
+        versionMatch.group(3).toInteger()
 
     defaultConfig {
         minSdk 23
-        versionCode 1
+        versionCode appVersionCode
         versionName pkgJson.version
     }
 
@@ -32,12 +39,16 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '11'
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
 }
 

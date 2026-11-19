@@ -20,7 +20,12 @@ const logger = log('recording')
 
 const sessions = new Map<
   string,
-  { stream: fs.WriteStream; file: string; deviceId: string }
+  {
+    stream: fs.WriteStream
+    file: string
+    deviceId: string
+    error: Error | null
+  }
 >()
 
 function timestamp() {
@@ -36,12 +41,7 @@ const start: IpcRecordingStart = async (deviceId) => {
   // 新会话开始前先把旧的正常收尾
   for (const [oldId, old] of [...sessions]) {
     if (old.deviceId === deviceId) {
-      sessions.delete(oldId)
-      try {
-        old.stream.end()
-      } catch {
-        // ignore
-      }
+      await stop(oldId).catch(() => undefined)
       logger.warn('recording restart, closed previous session', old.file)
     }
   }
@@ -52,17 +52,28 @@ const start: IpcRecordingStart = async (deviceId) => {
   const safeId = String(deviceId).replace(/[^\w.-]+/g, '_')
   const file = path.join(dir, `${safeId}-${timestamp()}.webm`)
   const stream = fs.createWriteStream(file)
-  stream.on('error', (e) => logger.error('write failed', e))
+  const session = {
+    stream,
+    file,
+    deviceId,
+    error: null as Error | null,
+  }
+  stream.on('error', (e) => {
+    session.error = e
+    logger.error('write failed', e)
+  })
 
   const id = uniqId('rec')
-  sessions.set(id, { stream, file, deviceId })
+  sessions.set(id, session)
   logger.info('recording start', file)
   return { id, path: file }
 }
 
 const chunk: IpcRecordingChunk = async (id, data) => {
   const session = sessions.get(id)
-  if (!session) return
+  if (!session) throw new Error('录制会话已结束')
+  if (session.error) throw session.error
+  if (session.stream.destroyed) throw new Error('录制文件已关闭')
 
   const buf = Buffer.from(data)
   if (session.stream.write(buf)) return
@@ -89,34 +100,57 @@ const chunk: IpcRecordingChunk = async (id, data) => {
 
 const stop: IpcRecordingStop = async (id) => {
   const session = sessions.get(id)
-  if (!session) return { path: '' }
+  if (!session) return { path: '', ok: false, error: '录制会话不存在' }
 
-  sessions.delete(id)
   // 流已经 emit 过 error（autoDestroy）时 end 的回调不保证被调用，
   // 直接 await 会让 IPC 悬着、按钮卡在「停止中」
-  await Promise.race([
-    new Promise<void>((resolve) => session.stream.end(() => resolve())),
-    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-  ])
-  logger.info('recording stop', session.file)
-  return { path: session.file }
-}
-
-/** webm 的 Duration 在 trailer 里：退出前必须正常 end 所有还在写的流。 */
-function closeAll() {
-  for (const [, session] of sessions) {
-    try {
-      session.stream.end()
-    } catch {
-      // ignore
+  if (!session.stream.destroyed) {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const completed = await Promise.race([
+      new Promise<boolean>((resolve) =>
+        session.stream.end(() => resolve(true))
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 3000)
+      }),
+    ])
+    if (timer) clearTimeout(timer)
+    if (!completed && !session.error) {
+      session.error = new Error('录制文件收尾超时')
     }
   }
-  sessions.clear()
+
+  sessions.delete(id)
+  logger.info('recording stop', session.file)
+  return {
+    path: session.file,
+    ok: !session.error,
+    error: session.error?.message,
+  }
+}
+
+/** webm 的 Duration 在 trailer 里：退出前必须等所有流完成 end。 */
+async function closeAll() {
+  await Promise.all(
+    [...sessions.keys()].map((id) => stop(id).catch(() => undefined))
+  )
 }
 
 export function init() {
   handleEvent('recordingStart', start)
   handleEvent('recordingChunk', chunk)
   handleEvent('recordingStop', stop)
-  app.on('will-quit', closeAll)
+
+  let quitting = false
+  let readyToQuit = false
+  app.on('before-quit', (event) => {
+    if (readyToQuit || !sessions.size) return
+    event.preventDefault()
+    if (quitting) return
+    quitting = true
+    closeAll().finally(() => {
+      readyToQuit = true
+      app.quit()
+    })
+  })
 }

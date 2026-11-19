@@ -65,6 +65,7 @@ export class ScreenRecorder {
 
     // 分片串行写：并行 IPC 会乱序，webm 头部时间戳就乱了
     let writeChain: Promise<unknown> = Promise.resolve()
+    let writeError: Error | null = null
 
     recorder.ondataavailable = (e) => {
       if (!e.data.size || !this.sessionId) return
@@ -73,7 +74,9 @@ export class ScreenRecorder {
       writeChain = writeChain
         .then(() => e.data.arrayBuffer())
         .then((buffer) => main.recordingChunk(id, new Uint8Array(buffer)))
-        .catch(() => undefined)
+        .catch((error) => {
+          writeError = error instanceof Error ? error : new Error(String(error))
+        })
     }
 
     recorder.onstop = async () => {
@@ -88,16 +91,25 @@ export class ScreenRecorder {
       }
 
       let saved = ''
+      let stopError = ''
       try {
         const result = await main.recordingStop(this.sessionId)
         saved = result.path
-      } catch {
-        // ignore
+        if (!result.ok) stopError = result.error || '录制文件未能完整收尾'
+      } catch (error) {
+        stopError = error instanceof Error ? error.message : String(error)
       }
       this.sessionId = ''
 
       this.hooks.onState(false)
-      this.hooks.onToast(saved ? `录制已保存：${saved}` : '录制已停止')
+      const error = writeError || stopError
+      if (error) {
+        this.hooks.onToast(
+          `录制失败：${error instanceof Error ? error.message : error}`
+        )
+      } else {
+        this.hooks.onToast(saved ? `录制已保存：${saved}` : '录制已停止')
+      }
     }
 
     this.starting = true

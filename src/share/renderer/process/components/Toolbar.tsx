@@ -12,6 +12,7 @@ import LunaModal from 'luna-modal'
 import { isDev } from '../../../common/util'
 import toBool from 'licia/toBool'
 import Style from './Toolbar.module.scss'
+import { notify } from '../../lib/util'
 
 export default observer(function Toolbar() {
   async function stop() {
@@ -21,8 +22,12 @@ export default observer(function Toolbar() {
     )
     if (!confirmed) return
 
-    main.killProcess(process.pid)
-    store.refresh()
+    try {
+      await main.killProcess(process.pid)
+      await store.refresh()
+    } catch {
+      notify(t('commonErr'), { icon: 'error' })
+    }
   }
 
   function inspect() {

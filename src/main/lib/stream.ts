@@ -10,6 +10,7 @@ import net from 'node:net'
 import { ipcMain } from 'electron'
 import type { MessagePortMain, WebContents } from 'electron'
 import log from 'share/common/log'
+import { isAppUrl } from 'share/main/lib/util'
 
 const logger = log('stream')
 
@@ -125,6 +126,10 @@ function closeWith(
 
 export function init() {
   ipcMain.on('streamOpen', (event, payload: unknown) => {
+    if (!isAppUrl(event.senderFrame?.url || '')) {
+      event.ports?.[0]?.close()
+      return
+    }
     const port = event.ports && event.ports[0]
     const id =
       payload && typeof payload === 'object'
@@ -191,6 +196,7 @@ export function init() {
   })
 
   ipcMain.on('streamWrite', (event, id: number, data: Uint8Array) => {
+    if (!isAppUrl(event.senderFrame?.url || '')) return
     if (!Number.isInteger(id) || id <= 0) return
     const session = sessions.get(keyOf(event.sender.id, id))
     if (!session || session.closed) return
@@ -203,6 +209,7 @@ export function init() {
   })
 
   ipcMain.on('streamClose', (event, id: number) => {
+    if (!isAppUrl(event.senderFrame?.url || '')) return
     if (!Number.isInteger(id) || id <= 0) return
     const session = sessions.get(keyOf(event.sender.id, id))
     if (session) dispose(session)

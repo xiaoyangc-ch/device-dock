@@ -2,6 +2,12 @@ import Style from './App.module.scss'
 import icon from '../../../renderer/assets/icon.png'
 
 const CHANGES = [
+  '4.1.0　设备服务自动升级、索引流式加载、应用缓存边界与 Electron/AGP 工具链升级',
+
+  '4.0.2　修复麒麟/Huawei 应用列表缺项、应用详情读取失败与 APK 导出失败',
+
+  '4.0.1　麒麟/Huawei Android 兼容、Android 11 文件分页修复、目录索引完整性优化',
+
   '4.0.0　更名「设备坞」：移除 APM 远程业务（账号登录、按 MAC 查设备、frpc 穿透），连接只保留 USB / 局域网',
 
   '3.0.8　应用页按需提取真实图标，缓存到本地，不再显示首字母占位',

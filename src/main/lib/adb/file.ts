@@ -10,9 +10,13 @@
 import { Client } from '@devicefarmer/adbkit'
 import fs from 'fs-extra'
 import path from 'node:path'
+import readline from 'node:readline'
+import { once } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import { handleEvent } from 'share/main/lib/util'
 import { getUserDataPath } from 'share/main/lib/util'
-import { assertDeletable } from 'common/guards'
+import { assertDeletable, normalizeDevicePath } from 'common/guards'
+import { LruCache } from 'common/lru'
 import { takeBatch } from 'common/batch'
 import { shell as electronShell } from 'electron'
 import {
@@ -25,9 +29,9 @@ import {
 } from './base'
 import startWith from 'licia/startWith'
 import contain from 'licia/contain'
-import uuid from 'licia/uuid'
 import { getPackages } from './package'
 import { parseLsLine } from './lsLine'
+import { parsePackageListing } from './packageParse'
 import {
   IFile,
   IpcCreateDir,
@@ -49,6 +53,19 @@ import throttle from 'licia/throttle'
 import Semaphore from 'licia/Semaphore'
 import splitPath from 'licia/splitPath'
 import mime from 'licia/mime'
+import { joinDevicePath, shellQuotePath } from './filePath'
+import {
+  buildDirSet,
+  hitsToFiles,
+  IFileIndex,
+  INDEX_HEADER,
+  INDEX_MAX_ENTRIES,
+  IIndexHit,
+  isExpectedFindError,
+  searchIndex,
+  slicePage,
+} from './fileIndex'
+import { dirCountCommand, dirPageCommand, dirsFirstCommand } from './fileList'
 
 let client: Client
 
@@ -79,25 +96,56 @@ function withMetaSlot<T>(fn: () => Promise<T>): Promise<T> {
 // 下载 / 打开
 // ---------------------------------------------------------------------------
 
-const pullFile: IpcPullFile = async function (deviceId, src, dest) {
-  const stat = await withMetaSlot(() => statFile(deviceId, src))
+const pullFile: IpcPullFile = async function (
+  deviceId,
+  src,
+  dest,
+  options = {},
+) {
+  src = normalizeDevicePath(src)
+  let stat
+  try {
+    stat = await withMetaSlot(() => statFile(deviceId, src))
+  } catch (e) {
+    // 个别 Huawei adbd 的 sync STAT 不可用，但 sync PULL 仍能读 APK。
+    // APK 没有目录递归需求，拿到包路径后直接交给拉取层再确认。
+    if (!/\.apk$/i.test(src)) throw e
+    stat = {
+      size: 0,
+      mtime: new Date(0),
+      directory: false,
+      mode: '',
+    }
+  }
+  const overwrite = options.overwrite === true
 
   if (stat.directory) {
-    await fs.ensureDir(dest)
+    if (!overwrite && (await fs.pathExists(dest))) {
+      throw new Error(`EEXIST: 本地已存在同名目录：${dest}`)
+    }
+    const tempDest = `${dest}.devicedock-${randomUUID()}`
+    await fs.ensureDir(tempDest)
     const files = await withMetaSlot(() => readDir(deviceId, src))
-    // 分批递归：stat 已限流，这里再压一层并发，避免几千个 pull 同时开连接
-    for (let i = 0; i < files.length; i += 8) {
-      await Promise.all(
-        files
-          .slice(i, i + 8)
-          .map((file) =>
-            pullFile(
-              deviceId,
-              `${src}/${file.name}`,
-              path.join(dest, file.name)
-            )
-          )
-      )
+    try {
+      // 分批递归：stat 已限流，这里再压一层并发，避免几千个 pull 同时开连接
+      for (let i = 0; i < files.length; i += 8) {
+        await Promise.all(
+          files
+            .slice(i, i + 8)
+            .map((file) =>
+              pullFile(
+                deviceId,
+                `${src}/${file.name}`,
+                path.join(tempDest, file.name),
+                options,
+              ),
+            ),
+        )
+      }
+      await fs.move(tempDest, dest, { overwrite })
+    } catch (e) {
+      await fs.remove(tempDest).catch(() => undefined)
+      throw e
     }
     return
   }
@@ -115,7 +163,7 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
   }
 
   try {
-    const id = uuid()
+    const id = randomUUID()
 
     // 非 root 读 /data/data：run-as 把内容直接流到本地，设备上不落盘。
     // 旧做法「run-as cp 到 /data/local/tmp」会因 shell:shell 0771 无写权限失败，
@@ -130,29 +178,36 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
         TransferType.Download,
         src,
         dest,
-        stat.size
+        stat.size,
       )
-      const result = await spawnAdbBuffer(
-        [
-          '-s',
-          deviceId,
-          'exec-out',
-          `run-as ${shellQuotePath(pkg)} cat ${shellQuotePath(rel)}`,
-        ],
-        120000
-      )
-      if (result.timedOut) throw new Error('拉取超时')
-      if (result.code !== 0) {
-        throw new Error('拉取失败：没有权限读取该文件（设备未 root）')
-      }
-      const expected = stat.size || 0
-      if (expected > 0 && result.buffer.length !== expected) {
-        throw new Error(
-          `文件不完整：期望 ${expected} 字节，实际 ${result.buffer.length} 字节`
+      try {
+        const result = await spawnAdbBuffer(
+          [
+            '-s',
+            deviceId,
+            'exec-out',
+            `run-as ${shellQuotePath(pkg)} cat ${shellQuotePath(rel)}`,
+          ],
+          120000,
         )
+        if (result.timedOut) throw new Error('拉取超时')
+        if (result.code !== 0) {
+          throw new Error('拉取失败：没有权限读取该文件（设备未 root）')
+        }
+        const expected = stat.size || 0
+        if (expected > 0 && result.buffer.length !== expected) {
+          throw new Error(
+            `文件不完整：期望 ${expected} 字节，实际 ${result.buffer.length} 字节`,
+          )
+        }
+        await fs.writeFile(dest, result.buffer, {
+          flag: overwrite ? 'w' : 'wx',
+        })
+        window.sendTo('main', 'finishTransfer', id, true)
+      } catch (e) {
+        window.sendTo('main', 'finishTransfer', id, false)
+        throw e
       }
-      await fs.writeFile(dest, result.buffer)
-      window.sendTo('main', 'finishTransfer', id, true)
       release()
       return
     }
@@ -166,12 +221,13 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
       TransferType.Download,
       src,
       dest,
-      stat.size
+      stat.size,
     )
 
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let writable: ReturnType<typeof fs.createWriteStream> | null = null
+      let writableCreated = false
       // adbd 卡死 / USB 半断时 transfer 既不 error 也不 finish：
       // 没有超时的话 finish 永不执行，fileSemaphore 槽位泄漏，
       // 攒够 5 次之后所有上传下载都停在 waitFileSlot 上，只能重启应用
@@ -180,7 +236,7 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
         if (idle) clearTimeout(idle)
         idle = setTimeout(
           () => finish(new Error('传输超时：120 秒没有进展')),
-          120000
+          120000,
         )
       }
 
@@ -204,6 +260,7 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
           } catch {
             // ignore
           }
+          if (writableCreated) fs.remove(dest).catch(() => undefined)
         }
         window.sendTo('main', 'finishTransfer', id, !error)
         if (error) {
@@ -213,7 +270,12 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
         }
       }
 
-      writable = fs.createWriteStream(dest)
+      writable = fs.createWriteStream(dest, {
+        flags: overwrite ? 'w' : 'wx',
+      })
+      writable.on('open', () => {
+        writableCreated = true
+      })
       // 磁盘满/无权限时 WriteStream 会发 error，没监听就是主进程未捕获异常
       writable.on('error', (error) => finish(error))
       writable.on('finish', () => finish())
@@ -222,7 +284,7 @@ const pullFile: IpcPullFile = async function (deviceId, src, dest) {
         throttle(({ bytesTransferred }) => {
           armIdle()
           window.sendTo('main', 'updateTransfer', id, bytesTransferred)
-        }, 500)
+        }, 500),
       )
       transfer.on('error', (error) => finish(error))
       armIdle()
@@ -252,7 +314,7 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
   }
   const safeName = (path.basename(devicePath) || 'preview').replace(
     /[^\w.-]+/g,
-    '_'
+    '_',
   )
   const dest = path.join(dir, `${tag}-${safeName}`)
   await pullFile(deviceId, devicePath, dest)
@@ -263,21 +325,43 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
 // 删除 / 新建
 // ---------------------------------------------------------------------------
 
+function decodeMountPath(value: string) {
+  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+    String.fromCharCode(parseInt(octal, 8)),
+  )
+}
+
+async function getMountPoints(deviceId: string) {
+  const mounts = new Set<string>()
+  const out = String(await shell(deviceId, 'cat /proc/mounts 2>/dev/null'))
+  for (const line of out.split('\n')) {
+    const parts = line.trim().split(/\s+/)
+    if (parts.length < 2 || !parts[1].startsWith('/')) continue
+    mounts.add(decodeMountPath(parts[1]))
+  }
+  return mounts
+}
+
+async function assertRemoteDeletable(deviceId: string, devicePath: string) {
+  return assertDeletable(devicePath, await getMountPoints(deviceId))
+}
+
 const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
-  assertDeletable(devicePath)
+  const safePath = await assertRemoteDeletable(deviceId, devicePath)
   // checked：rm 失败（只读挂载/权限不足）必须报错，不能让 UI 显示删除成功
-  await fileShell(deviceId, 'rm', devicePath, undefined, true, 120000)
+  await fileShell(deviceId, 'rm', safePath, undefined, true, 120000)
   resetFileIndex(deviceId)
 }
 
 const deleteDir: IpcDeleteDir = async function (deviceId, devicePath) {
-  assertDeletable(devicePath)
-  await fileShell(deviceId, 'rm -rf', devicePath, undefined, true, 600000)
+  const safePath = await assertRemoteDeletable(deviceId, devicePath)
+  await fileShell(deviceId, 'rm -rf', safePath, undefined, true, 600000)
   resetFileIndex(deviceId)
 }
 
 const createDir: IpcCreateDir = async function (deviceId, devicePath) {
-  await fileShell(deviceId, 'mkdir -p', devicePath, undefined, true, 60000)
+  const safePath = normalizeDevicePath(devicePath)
+  await fileShell(deviceId, 'mkdir -p', safePath, undefined, true, 60000)
   resetFileIndex(deviceId)
 }
 
@@ -286,7 +370,11 @@ const createDir: IpcCreateDir = async function (deviceId, devicePath) {
 // ---------------------------------------------------------------------------
 
 const pushFile: IpcPushFile = async function (deviceId, src, dest) {
-  const stat = await fs.stat(src)
+  const stat = await fs.lstat(src)
+  if (stat.isSymbolicLink()) {
+    throw new Error(`不支持上传符号链接：${src}`)
+  }
+  dest = normalizeDevicePath(dest)
 
   if (stat.isDirectory()) {
     await createDir(deviceId, dest)
@@ -297,8 +385,8 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
         names
           .slice(i, i + 8)
           .map((name) =>
-            pushFile(deviceId, path.join(src, name), `${dest}/${name}`)
-          )
+            pushFile(deviceId, path.join(src, name), `${dest}/${name}`),
+          ),
       )
     }
     return
@@ -316,13 +404,13 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
   try {
     // 非 root 写 /data/data：先推到 /data/local/tmp，成功后再 cp 进目标目录
     if (startWith(dest, '/data/data/') && !(await isRooted(deviceId))) {
-      tmpFilePath = '/data/local/tmp/' + uuid()
+      tmpFilePath = '/data/local/tmp/' + randomUUID()
     }
 
     const device = await client.getDevice(deviceId)
     const transfer = await device.push(src, tmpFilePath || dest)
 
-    const id = uuid()
+    const id = randomUUID()
     window.sendTo(
       'main',
       'startTransfer',
@@ -330,7 +418,7 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
       TransferType.Upload,
       src,
       dest,
-      stat.size
+      stat.size,
     )
 
     await new Promise<void>((resolve, reject) => {
@@ -341,7 +429,7 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
         if (idle) clearTimeout(idle)
         idle = setTimeout(
           () => done(new Error('传输超时：120 秒没有进展')),
-          120000
+          120000,
         )
       }
 
@@ -379,7 +467,7 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
         throttle(({ bytesTransferred }) => {
           armIdle()
           window.sendTo('main', 'updateTransfer', id, bytesTransferred)
-        }, 500)
+        }, 500),
       )
       transfer.on('error', (error) => cleanup(error))
       armIdle()
@@ -396,24 +484,28 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
 // ---------------------------------------------------------------------------
 
 const moveFile: IpcMoveFile = async function (deviceId, src, dest) {
+  const source = normalizeDevicePath(src)
+  const target = normalizeDevicePath(dest)
+  const parent = (value: string) =>
+    value.slice(0, value.lastIndexOf('/') + 1) || '/'
+  if (parent(source) !== parent(target)) {
+    throw new Error('重命名不能跨目录')
+  }
   // mv 会静默覆盖同名文件。界面只看到当前分页，目标可能在未加载的下一页，
   // 必须在设备侧再拦一次，避免重命名顺手删掉一个文件
-  if (await devicePathExists(deviceId, dest)) {
+  if (await devicePathExists(deviceId, target)) {
     throw new Error('目标已存在同名文件')
   }
-  await fileShell(deviceId, 'mv', src, dest, true, 120000)
+  await fileShell(deviceId, 'mv', source, target, true, 120000)
   resetFileIndex(deviceId)
-}
-
-function joinDevicePath(dir: string, name: string) {
-  if (!dir || dir === '/') return '/' + name
-  return dir.replace(/\/+$/, '') + '/' + name
 }
 
 async function devicePathExists(deviceId: string, devicePath: string) {
   const out = await shell(
     deviceId,
-    `[ -e ${shellQuotePath(devicePath)} ] && echo 1 || echo 0`
+    `{ [ -e ${shellQuotePath(devicePath)} ] || [ -L ${shellQuotePath(
+      devicePath,
+    )} ]; } && echo 1 || echo 0`,
   )
   return String(out).trim() === '1'
 }
@@ -421,7 +513,14 @@ async function devicePathExists(deviceId: string, devicePath: string) {
 /**
  * 复制/剪切粘贴：目标重名时自动加 " (1)"，逐个处理，单个失败不影响其余。
  */
-const pasteFiles: IpcPasteFiles = async function (deviceId, sources, dest, cut) {
+const pasteFiles: IpcPasteFiles = async function (
+  deviceId,
+  sources,
+  dest,
+  cut,
+) {
+  dest = normalizeDevicePath(dest)
+  sources = sources.map((source) => normalizeDevicePath(source))
   const failed: { name: string; error: string }[] = []
   const used = new Set<string>()
   let copied = 0
@@ -450,14 +549,7 @@ const pasteFiles: IpcPasteFiles = async function (deviceId, sources, dest, cut) 
       }
       used.add(target)
 
-      await fileShell(
-        deviceId,
-        cut ? 'mv' : 'cp -r',
-        src,
-        target,
-        true,
-        600000
-      )
+      await fileShell(deviceId, cut ? 'mv' : 'cp -r', src, target, true, 600000)
       copied++
     } catch (e: any) {
       failed.push({ name: base || src, error: e?.message || String(e) })
@@ -488,9 +580,13 @@ const readDir: IpcReadDir = async function (deviceId, deviceDir) {
 
   const result: IFile[] = []
   for (const file of files) {
+    const directory =
+      typeof file.isDirectory === 'function'
+        ? file.isDirectory()
+        : !file.isFile()
     const item: IFile = {
       name: file.name,
-      directory: !file.isFile(),
+      directory,
       mtime: new Date(file.mtimeMs),
       mode: file.mode,
     }
@@ -503,11 +599,6 @@ const readDir: IpcReadDir = async function (deviceId, deviceDir) {
   return result
 }
 
-/** 设备路径转 shell 单引号字符串：文件名里的 ' 要转成 '\''。 */
-function shellQuotePath(devicePath: string) {
-  return "'" + devicePath.replace(/'/g, "'\\''") + "'"
-}
-
 /**
  * Android 6 及更早的 ls 是 toolbox：不认 -L，直接 abort，整页为空；
  * 7.0 起 toybox 才支持。每条命令试错太慢，按设备探测一次并缓存。
@@ -518,7 +609,7 @@ function lsFollowsSymlink(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `ls -laL / >/dev/null 2>&1 && echo devicedock_ls_follow || echo devicedock_ls_plain`
+      `ls -laL / >/dev/null 2>&1 && echo devicedock_ls_follow || echo devicedock_ls_plain`,
     )
       .then((out) => contain(out, 'devicedock_ls_follow'))
       .catch(() => false)
@@ -528,7 +619,10 @@ function lsFollowsSymlink(deviceId: string): Promise<boolean> {
 }
 
 /** 老系统不解析 shell 输出：格式/软链/权限全是坑，直接走 adb 同步协议列目录。 */
-async function readDirSorted(deviceId: string, deviceDir: string): Promise<IFile[]> {
+async function readDirSorted(
+  deviceId: string,
+  deviceDir: string,
+): Promise<IFile[]> {
   const dir = deviceDir.length > 1 ? deviceDir.replace(/\/+$/, '') : deviceDir
   const all = await readDir(deviceId, dir)
   return all.sort((a, b) => {
@@ -541,13 +635,14 @@ async function readDirSorted(deviceId: string, deviceDir: string): Promise<IFile
  * 设备上不一定有 awk：用两次 ls + grep 拼出「目录在前、文件在后」。
  * 大目录里文件夹若按字母序排在上千文件之后，首屏就会「看不到文件夹」。
  */
-function dirsFirst(q: string) {
-  return `{ ls -laL ${q} | grep '^d'; ls -laL ${q} | grep -v '^d' | grep -v '^total '; }`
-}
-
 // 分页列目录：设备端 ls 很快（几十毫秒），慢的是把上万条完整清单传回来。
 // 每页只取 limit 条，先出首屏，点「加载更多」再取下一页。
-const readDirPage: IpcReadDirPage = async function (deviceId, path, offset, limit) {
+const readDirPage: IpcReadDirPage = async function (
+  deviceId,
+  path,
+  offset,
+  limit,
+) {
   const syncMode =
     (startWith(path, '/data/') && !startWith(path, '/data/local/tmp/')) ||
     !(await lsFollowsSymlink(deviceId))
@@ -558,8 +653,7 @@ const readDirPage: IpcReadDirPage = async function (deviceId, path, offset, limi
 
   const q = shellQuotePath(path)
 
-  // 头部固定是 . 和 .. 两行，分页时跳过；不依赖 awk/sed 的转义
-  const cmd = `${dirsFirst(q)} | tail -n +${offset + 3} | head -n ${limit}`
+  const cmd = dirPageCommand(q, offset, limit)
   const r = await spawnAdb(['-s', deviceId, 'shell', cmd], 60000)
   // 超时返回的是半截 stdout，当成完整结果会静默少列文件
   if (r.timedOut) throw new Error('列目录超时：结果不完整，请重试')
@@ -582,13 +676,16 @@ const readDirPage: IpcReadDirPage = async function (deviceId, path, offset, limi
   let total = offset + files.length
   if (dataLines >= limit) {
     const totalR = await spawnAdb(
-      ['-s', deviceId, 'shell', `${dirsFirst(q)} | wc -l`],
-      30000
+      ['-s', deviceId, 'shell', dirCountCommand(q)],
+      30000,
     )
     if (!totalR.timedOut) {
-      // 去掉 . 和 .. 两行
       total =
-        (Number(String(totalR.stdout || '').trim().split(/\s+/)[0]) || 2) - 2
+        Number(
+          String(totalR.stdout || '')
+            .trim()
+            .split(/\s+/)[0],
+        ) || 0
     }
   }
   return { files, total }
@@ -626,7 +723,7 @@ function supportsRecursiveFind(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `find . -maxdepth 0 -iname devicedock >/dev/null 2>&1 && echo devicedock_find_ok || echo devicedock_find_no`
+      `find . -maxdepth 0 -iname devicedock >/dev/null 2>&1 && echo devicedock_find_ok || echo devicedock_find_no`,
     )
       .then((out) => String(out).includes('devicedock_find_ok'))
       .catch(() => false)
@@ -641,18 +738,50 @@ function supportsRecursiveFind(deviceId: string): Promise<boolean> {
 
 // 只有这些 fstype 才是「用户文件盘」；tmpfs/proc/overlay 不搜
 const STORAGE_FS = new Set([
-  'ext2', 'ext3', 'ext4', 'f2fs', 'vfat', 'exfat', 'ntfs', 'ntfs3',
-  'fuseblk', 'texfat', 'msdos', 'iso9660', 'udf', 'sdcardfs', 'fuse', 'esdfs',
+  'ext2',
+  'ext3',
+  'ext4',
+  'f2fs',
+  'vfat',
+  'exfat',
+  'ntfs',
+  'ntfs3',
+  'fuseblk',
+  'texfat',
+  'msdos',
+  'iso9660',
+  'udf',
+  'sdcardfs',
+  'fuse',
+  'esdfs',
 ])
 
 // Android 会在 /mnt 下挂一堆同一份存储的运行时视图，逐个搜只会重复和拖慢
 const SKIP_MOUNTS = [
-  '/mnt/runtime/', '/mnt/user/', '/mnt/installer', '/mnt/androidwritable',
-  '/mnt/pass_through', '/mnt/asec', '/mnt/obb', '/mnt/secure', '/mnt/expand',
-  '/storage/self', '/data/media/obb', '/data/media/android_secure',
-  '/data/user', '/data/app', '/data/data', '/data/system', '/data/vendor',
-  '/data/misc', '/data/adb', '/data/anr', '/data/tombstones',
-  '/data/dalvik-cache', '/data/local', '/data_mirror',
+  '/mnt/runtime/',
+  '/mnt/user/',
+  '/mnt/installer',
+  '/mnt/androidwritable',
+  '/mnt/pass_through',
+  '/mnt/asec',
+  '/mnt/obb',
+  '/mnt/secure',
+  '/mnt/expand',
+  '/storage/self',
+  '/data/media/obb',
+  '/data/media/android_secure',
+  '/data/user',
+  '/data/app',
+  '/data/data',
+  '/data/system',
+  '/data/vendor',
+  '/data/misc',
+  '/data/adb',
+  '/data/anr',
+  '/data/tombstones',
+  '/data/dalvik-cache',
+  '/data/local',
+  '/data_mirror',
 ]
 
 // 系统分区不是用户的文件盘，扫它们又慢又没结果
@@ -732,7 +861,7 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
     const list = plainBases.map(shellQuotePath).join(' ')
     const out = await shell(
       deviceId,
-      `for p in ${list}; do [ -d "$p" ] && [ -r "$p" ] && [ -x "$p" ] && echo "$p"; done`
+      `for p in ${list}; do [ -d "$p" ] && [ -r "$p" ] && [ -x "$p" ] && echo "$p"; done`,
     )
     for (const line of String(out).split('\n')) {
       const item = line.trim()
@@ -748,10 +877,21 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
   const CONTAINER_SKIP: Record<string, string[]> = {
     '/mnt': [
       // 同一份存储的重复视图
-      'sdcard', 'pass_through', 'androidwritable', 'installer', 'user',
-      'runtime', 'asec', 'obb', 'secure', 'expand',
+      'sdcard',
+      'pass_through',
+      'androidwritable',
+      'installer',
+      'user',
+      'runtime',
+      'asec',
+      'obb',
+      'secure',
+      'expand',
       // 系统镜像：product/vendor/iso 是只读系统分区或光盘镜像
-      'product', 'vendor', 'vendor_dlkm', 'iso',
+      'product',
+      'vendor',
+      'vendor_dlkm',
+      'iso',
       // appfuse：Android 11 给 App 访问自身数据用的视图，几十万条目且无用户文件
       'appfuse',
     ],
@@ -763,7 +903,7 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
     try {
       const out = await shell(
         deviceId,
-        `for p in ${base}/*; do [ -d "$p" ] && [ ! -L "$p" ] && echo "$p"; done`
+        `for p in ${base}/*; do [ -d "$p" ] && [ ! -L "$p" ] && echo "$p"; done`,
       )
       for (const line of String(out).split('\n')) {
         const item = line.trim()
@@ -781,19 +921,53 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
   // 平时不能跑 —— Android 根目录里 /lib 是指向 /system/lib 的软链，
   // /root 和 /tmp-mksh 是 shell 的杂物，find -L 跟进去既慢又会搜出系统文件。
   const SKIP_TOP = new Set([
-    '/proc', '/sys', '/dev', '/acct', '/config', '/d', '/etc', '/bin', '/res',
-    '/lib', '/lib64', '/root', '/tmp-mksh', '/snapshot',
-    '/oem', '/system', '/system_ext', '/vendor', '/vendor_dlkm', '/product',
-    '/odm', '/odm_dlkm', '/apex', '/data', '/data_mirror', '/cache',
-    '/metadata', '/persist', '/efs', '/firmware', '/boot', '/init', '/sbin',
-    '/lost+found', '/tmp', '/var', '/linkerconfig', '/debug_ramdisk',
-    '/storage', '/mnt', '/sdcard',
+    '/proc',
+    '/sys',
+    '/dev',
+    '/acct',
+    '/config',
+    '/d',
+    '/etc',
+    '/bin',
+    '/res',
+    '/lib',
+    '/lib64',
+    '/root',
+    '/tmp-mksh',
+    '/snapshot',
+    '/oem',
+    '/system',
+    '/system_ext',
+    '/vendor',
+    '/vendor_dlkm',
+    '/product',
+    '/odm',
+    '/odm_dlkm',
+    '/apex',
+    '/data',
+    '/data_mirror',
+    '/cache',
+    '/metadata',
+    '/persist',
+    '/efs',
+    '/firmware',
+    '/boot',
+    '/init',
+    '/sbin',
+    '/lost+found',
+    '/tmp',
+    '/var',
+    '/linkerconfig',
+    '/debug_ramdisk',
+    '/storage',
+    '/mnt',
+    '/sdcard',
   ])
   if (!roots.size) {
     try {
       const out = await shell(
         deviceId,
-        'for d in /*; do [ -d "$d" ] && [ ! -L "$d" ] && echo "$d"; done'
+        'for d in /*; do [ -d "$d" ] && [ ! -L "$d" ] && echo "$d"; done',
       )
       for (const line of String(out).split('\n')) {
         const item = line.trim()
@@ -815,7 +989,9 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
   const scanToDisplay = new Map<string, string>()
   const aliases: Array<[string, string]> = []
   for (const item of Array.from(roots)) {
-    if (item === '/storage/emulated') {
+    if (item === '/storage/emulated/0') {
+      aliases.push(['/data/media/0', item])
+    } else if (item === '/storage/emulated') {
       aliases.push(['/data/media', '/storage/emulated'])
     } else if (item.startsWith('/storage/') && item !== '/storage') {
       const id = item.slice('/storage/'.length)
@@ -830,10 +1006,13 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
       const list = aliases.map(([scan]) => shellQuotePath(scan)).join(' ')
       const out = await shell(
         deviceId,
-        `for p in ${list}; do [ -r "$p" ] && [ -x "$p" ] && echo "$p"; done`
+        `for p in ${list}; do [ -r "$p" ] && [ -x "$p" ] && echo "$p"; done`,
       )
       const readable = new Set(
-        String(out).split('\n').map((line) => line.trim()).filter(Boolean)
+        String(out)
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
       )
       for (const [scan, display] of aliases) {
         if (!readable.has(scan)) continue
@@ -853,7 +1032,7 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
       const list = Array.from(roots).map(shellQuotePath).join(' ')
       const out = await shell(
         deviceId,
-        `for p in ${list}; do r=$(readlink -f "$p" 2>/dev/null); [ -n "$r" ] && [ "$r" != "$p" ] && echo "$p|$r"; done`
+        `for p in ${list}; do r=$(readlink -f "$p" 2>/dev/null); [ -n "$r" ] && [ "$r" != "$p" ] && echo "$p|$r"; done`,
       )
       for (const line of String(out).split('\n')) {
         const [link, real] = line.trim().split('|')
@@ -861,7 +1040,7 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
         const covered = Array.from(roots).some(
           (item) =>
             item !== link &&
-            (item === real || real.startsWith(item.replace(/\/+$/, '') + '/'))
+            (item === real || real.startsWith(item.replace(/\/+$/, '') + '/')),
         )
         if (covered) roots.delete(link)
       }
@@ -879,7 +1058,7 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
   const hasEmulated = list.some(
     (item) =>
       item.display === '/storage/emulated' ||
-      item.display.startsWith('/storage/emulated/')
+      item.display.startsWith('/storage/emulated/'),
   )
   if (hasEmulated) {
     list = list.filter((item) => {
@@ -900,8 +1079,8 @@ async function computeSearchRoots(deviceId: string): Promise<ISearchRoot[]> {
         (parent, parentIndex) =>
           parentIndex !== index &&
           parent.scan !== root.scan &&
-          root.scan.startsWith(parent.scan.replace(/\/+$/, '') + '/')
-      )
+          root.scan.startsWith(parent.scan.replace(/\/+$/, '') + '/'),
+      ),
   )
 }
 
@@ -911,7 +1090,7 @@ const ROOTS_TTL = 30000
 
 async function getSearchRoots(
   deviceId: string,
-  currentPath?: string
+  currentPath?: string,
 ): Promise<ISearchRoot[]> {
   let cached = rootsCache.get(deviceId)
   if (!cached || Date.now() - cached.at > ROOTS_TTL) {
@@ -930,8 +1109,8 @@ async function getSearchRoots(
       const real = String(
         await shell(
           deviceId,
-          `readlink -f ${shellQuotePath(currentPath)} 2>/dev/null`
-        )
+          `readlink -f ${shellQuotePath(currentPath)} 2>/dev/null`,
+        ),
       ).trim()
       if (real.startsWith('/')) scan = real
     } catch {
@@ -944,8 +1123,7 @@ async function getSearchRoots(
       const prefixes = [root.scan, root.display]
       return prefixes.some(
         (prefix) =>
-          scan === prefix ||
-          scan.startsWith(prefix.replace(/\/+$/, '') + '/')
+          scan === prefix || scan.startsWith(prefix.replace(/\/+$/, '') + '/'),
       )
     })
     if (!covered) roots.push({ scan, display: currentPath })
@@ -969,7 +1147,7 @@ function supportsFindFollow(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      'find -L / -maxdepth 0 >/dev/null 2>&1 && echo devicedock_follow_ok || echo devicedock_follow_no'
+      'find -L / -maxdepth 0 >/dev/null 2>&1 && echo devicedock_follow_ok || echo devicedock_follow_no',
     )
       .then((out) => String(out).includes('devicedock_follow_ok'))
       .catch(() => false)
@@ -986,7 +1164,7 @@ function getFindExecMode(deviceId: string): Promise<FindExecMode> {
         try {
           const out = await shell(
             deviceId,
-            `find / -maxdepth 0 -exec ls -ld {} ${tail} 2>/dev/null`
+            `find / -maxdepth 0 -exec ls -ld {} ${tail} 2>/dev/null`,
           )
           return parseSearchLines(String(out).split('\n')).length > 0
         } catch {
@@ -1035,7 +1213,7 @@ function findCommand(
   safeKeyword: string,
   mode: FindExecMode,
   follow: string,
-  limit: number
+  limit: number,
 ) {
   const q = shellQuotePath(root)
   const base = `cd ${q} && find ${follow}. -iname '*${safeKeyword}*'`
@@ -1060,8 +1238,8 @@ async function searchRootByNames(
   seen: Set<string>,
   found: IFile[],
   killers?: Array<() => void>,
-  displayRoot?: string
-): Promise<number> {
+  displayRoot?: string,
+): Promise<{ added: number; timedOut: boolean }> {
   const prefix = displayRoot || root
   const q = shellQuotePath(root)
   const raw: string[] = []
@@ -1077,17 +1255,15 @@ async function searchRootByNames(
     (line) => {
       if (line.trim()) raw.push(line)
     },
-    killers ? (kill) => killers.push(kill) : undefined
+    killers ? (kill) => killers.push(kill) : undefined,
   )
-  if (result.timedOut) return 0
+  if (result.timedOut) return { added: 0, timedOut: true }
 
   const names = raw
     .map((line) => line.trim())
     .filter((line) => line.startsWith('./') || line.startsWith('/'))
-    .map((line) =>
-      line.startsWith('/') ? line : `${prefix}/${line.slice(2)}`
-    )
-  if (!names.length) return 0
+    .map((line) => (line.startsWith('/') ? line : `${prefix}/${line.slice(2)}`))
+  if (!names.length) return { added: 0, timedOut: false }
 
   // 目录标记单独查一次，拿不到就当文件处理，至少名字能搜到
   const dirs = new Set<string>()
@@ -1104,7 +1280,7 @@ async function searchRootByNames(
       (line) => {
         if (line.trim()) dirLines.push(line)
       },
-      killers ? (kill) => killers.push(kill) : undefined
+      killers ? (kill) => killers.push(kill) : undefined,
     )
     for (const line of dirLines) {
       const item = line.trim()
@@ -1131,7 +1307,7 @@ async function searchRootByNames(
     found.push(file)
     added++
   }
-  return added
+  return { added, timedOut: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,29 +1317,13 @@ async function searchRootByNames(
 // Android 没有 Everything 那种系统级文件表：第一次整盘遍历时把路径建成索引，
 // 之后同一台设备的全盘搜索只查内存（毫秒级）；30 分钟后或文件操作后重建。
 const INDEX_TTL = 30 * 60 * 1000
-const INDEX_MAX_ENTRIES = 300000
 
-interface IFileIndex {
-  /** "d\t/path" | "f\t/path" */
-  entries: string[]
-  /** 索引只存路径不带类型：父路径出现过就说明是目录 */
-  dirs: Set<string>
-  at: number
+interface IBuiltFileIndex {
+  index: IFileIndex
+  complete: boolean
 }
 
-function buildDirSet(entries: string[]) {
-  const dirs = new Set<string>()
-  for (const entry of entries) {
-    const tab = entry.indexOf('\t')
-    if (tab < 0) continue
-    const item = entry.slice(tab + 1)
-    const slash = item.lastIndexOf('/')
-    if (slash > 0) dirs.add(item.slice(0, slash))
-  }
-  return dirs
-}
-
-const fileIndexes = new Map<string, IFileIndex>()
+const fileIndexes = new LruCache<string, IFileIndex>({ maxEntries: 2 })
 
 /**
  * 设备移除时清掉所有按 deviceId 建表的缓存。
@@ -1171,7 +1331,10 @@ const fileIndexes = new Map<string, IFileIndex>()
  * 旧索引（单设备可达 30 万条路径）既占内存又永远不会再被命中。
  */
 export function clearDeviceCaches(deviceId: string) {
-  const drop = <T>(map: Map<string, T>) => {
+  const drop = (map: {
+    keys(): IterableIterator<string>
+    delete(key: string): unknown
+  }) => {
     for (const key of [...map.keys()]) {
       if (
         key === deviceId ||
@@ -1189,7 +1352,12 @@ export function clearDeviceCaches(deviceId: string) {
   drop(lsFollowCache)
   drop(findCache)
   drop(findExecCache)
+  drop(findFollowCache)
   drop(statFormatCache)
+  if (activeSearches.has(deviceId)) {
+    activeSearches.get(deviceId)?.()
+    activeSearches.delete(deviceId)
+  }
   try {
     fs.removeSync(fileIndexPath(deviceId))
   } catch {
@@ -1200,39 +1368,63 @@ export function clearDeviceCaches(deviceId: string) {
 function fileIndexPath(deviceId: string) {
   return path.join(
     getUserDataPath('file-index'),
-    deviceId.replace(/[^\w.-]+/g, '_') + '.idx'
+    deviceId.replace(/[^\w.-]+/g, '_') + '.idx',
   )
 }
 
-function loadFileIndex(deviceId: string): IFileIndex | null {
+async function loadFileIndex(deviceId: string): Promise<IFileIndex | null> {
   const cached = fileIndexes.get(deviceId)
   if (cached) return cached
 
+  let stream: ReturnType<typeof fs.createReadStream> | null = null
   try {
     const file = fileIndexPath(deviceId)
-    if (!fs.existsSync(file)) return null
+    if (!(await fs.pathExists(file))) return null
 
-    const entries = fs
-      .readFileSync(file, 'utf8')
-      .split('\n')
-      .filter((line) => line.length > 2)
+    const stat = await fs.stat(file)
+    stream = fs.createReadStream(file)
+    const lines = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity,
+    })
+    const entries: string[] = []
+    let header = ''
+    let invalid = false
+    for await (const line of lines) {
+      if (!header) {
+        header = line
+        invalid = header !== INDEX_HEADER
+        if (invalid) break
+        continue
+      }
+      if (line.length > 2) entries.push(line)
+      if (entries.length >= INDEX_MAX_ENTRIES) break
+    }
+    if (invalid) {
+      await fs.remove(file)
+      return null
+    }
     if (!entries.length) return null
 
     const index = {
       entries,
       dirs: buildDirSet(entries),
-      at: fs.statSync(file).mtimeMs,
+      at: stat.mtimeMs,
     }
     fileIndexes.set(deviceId, index)
     return index
   } catch {
     return null
+  } finally {
+    stream?.destroy()
   }
 }
 
 function resetFileIndex(deviceId: string) {
-  metaCache.clear()
-  indexSearchCache = null
+  for (const key of [...metaCache.keys()]) {
+    if (key.startsWith(deviceId + '\n')) metaCache.delete(key)
+  }
+  if (indexSearchCache?.deviceId === deviceId) indexSearchCache = null
   fileIndexes.delete(deviceId)
   try {
     fs.removeSync(fileIndexPath(deviceId))
@@ -1241,12 +1433,11 @@ function resetFileIndex(deviceId: string) {
   }
 }
 
-type IIndexHit = { path: string; directory: boolean; score: number }
-
 /** 全量结果缓存：翻页时不用每次重扫 20 万条索引；10 秒内同设备同关键字复用。 */
 let indexSearchCache: {
   deviceId: string
   keyword: string
+  indexAt: number
   hits: IIndexHit[]
   at: number
 } | null = null
@@ -1255,66 +1446,47 @@ let indexSearchCache: {
  * 只收集轻量命中（不构造 IFile/Date/mime）：26k 命中时对象分配是大头，
  * 真正要返回给 UI 的那一页才构造 IFile。
  */
-function searchFileIndex(
+async function searchFileIndex(
   deviceId: string,
   index: IFileIndex,
-  keyword: string
-): IIndexHit[] {
+  keyword: string,
+): Promise<IIndexHit[]> {
   if (
     indexSearchCache &&
     indexSearchCache.deviceId === deviceId &&
+    indexSearchCache.indexAt === index.at &&
     indexSearchCache.keyword === keyword &&
     Date.now() - indexSearchCache.at < 10000
   ) {
     return indexSearchCache.hits
   }
 
-  const lower = keyword.toLowerCase()
-  const hits: IIndexHit[] = []
-
-  for (const entry of index.entries) {
-    const tab = entry.indexOf('\t')
-    if (tab < 0) continue
-
-    const filePath = entry.slice(tab + 1)
-    const slash = filePath.lastIndexOf('/')
-    const name = filePath.slice(slash + 1)
-    if (!name) continue
-
-    const at = name.toLowerCase().indexOf(lower)
-    if (at < 0) continue
-
-    hits.push({
-      path: filePath,
-      directory: entry[0] === 'd' || index.dirs.has(filePath),
-      // 文件名开头命中优先，其次名字短的（更接近用户要找的东西）
-      score: at * 10000 + name.length,
-    })
+  const hits = await searchIndex(index, keyword)
+  indexSearchCache = {
+    deviceId,
+    keyword,
+    indexAt: index.at,
+    hits,
+    at: Date.now(),
   }
-
-  hits.sort((a, b) => a.score - b.score)
-  indexSearchCache = { deviceId, keyword, hits, at: Date.now() }
   return hits
 }
 
-function hitsToFiles(hits: IIndexHit[]): IFile[] {
-  return hits.map((hit) => {
-    const name = hit.path.slice(hit.path.lastIndexOf('/') + 1)
-    const file: IFile = {
-      name: hit.path,
-      directory: hit.directory,
-      mtime: new Date(),
-      mode: '',
+async function writeFileIndex(file: string, entries: string[]) {
+  await fs.ensureDir(path.dirname(file))
+  const stream = fs.createWriteStream(file)
+  try {
+    stream.write(INDEX_HEADER + '\n')
+    for (const entry of entries) {
+      if (!stream.write(entry + '\n')) {
+        await once(stream, 'drain')
+      }
     }
-    if (!hit.directory) file.mime = mime(splitPath(name).ext.slice(1))
-    return file
-  })
-}
-
-function slicePage(files: IFile[], offset: number, limit: number) {
-  return {
-    files: files.slice(offset, offset + limit),
-    total: files.length,
+    stream.end()
+    await once(stream, 'finish')
+  } catch (e) {
+    stream.destroy()
+    throw e
   }
 }
 
@@ -1328,7 +1500,7 @@ function supportsStatFormat(deviceId: string): Promise<boolean> {
   if (!probe) {
     probe = shell(
       deviceId,
-      `find / -maxdepth 0 -exec stat -c '%F|%s|%Y|%a|%n' {} + 2>/dev/null`
+      `find / -maxdepth 0 -exec stat -c '%F|%s|%Y|%a|%n' {} + 2>/dev/null`,
     )
       .then((out) => String(out).includes('directory|'))
       .catch(() => false)
@@ -1356,14 +1528,14 @@ function applyStatLine(file: IFile, line: string) {
 async function enrichMetaChunk(
   deviceId: string,
   chunk: IFile[],
-  useStat: boolean
+  useStat: boolean,
 ) {
   const paths = chunk.map((file) => shellQuotePath(file.name)).join(' ')
 
   if (useStat) {
     const out = await shell(
       deviceId,
-      `stat -c '%F|%s|%Y|%a|%n' ${paths} 2>/dev/null`
+      `stat -c '%F|%s|%Y|%a|%n' ${paths} 2>/dev/null`,
     )
     const byPath = new Map<string, string>()
     for (const line of String(out).split('\n')) {
@@ -1468,9 +1640,7 @@ async function statSearchHits(deviceId: string, files: IFile[]) {
       }
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(3, chunks.length) }, worker)
-  )
+  await Promise.all(Array.from({ length: Math.min(3, chunks.length) }, worker))
 
   for (const file of need) rememberMeta(deviceId, file)
 }
@@ -1487,7 +1657,7 @@ function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = indexBuildChain.then(fn, fn)
   indexBuildChain = run.then(
     () => undefined,
-    () => undefined
+    () => undefined,
   )
   return run
 }
@@ -1499,12 +1669,14 @@ async function buildFileIndex(
   emit: (files: IFile[]) => void,
   onProgress: (root: string, found: number) => void,
   killers: Array<() => void>,
-  aborted: () => boolean
-): Promise<IFileIndex | null> {
+  aborted: () => boolean,
+): Promise<IBuiltFileIndex | null> {
   const roots = await getSearchRoots(deviceId, currentPath)
   const lower = keyword.toLowerCase()
   const entries: string[] = []
   const seen = new Set<string>()
+  let complete = true
+  let truncated = false
 
   let found = 0
   let lastEmit = 0
@@ -1536,6 +1708,8 @@ async function buildFileIndex(
       // 建索引只列路径，不逐文件 stat：U 盘/fuse 上 stat 一个文件要 1ms，
       // 6 万个文件就是一分多钟。大小/时间等命中后再批量补
       entries.push(`f\t${abs}`)
+    } else {
+      truncated = true
     }
 
     const slash = abs.lastIndexOf('/')
@@ -1563,9 +1737,9 @@ async function buildFileIndex(
       const q = shellQuotePath(root.scan)
       onProgress(root.display, found)
 
-      const cmd = `cd ${q} && find -L . -print 2>/dev/null`
+      const cmd = `cd ${q} && find -L . -print`
       try {
-        await spawnAdbLines(
+        const result = await spawnAdbLines(
           ['-s', deviceId, 'shell', cmd],
           300000,
           (line) => {
@@ -1574,15 +1748,23 @@ async function buildFileIndex(
             if (!(item.startsWith('./') || item.startsWith('/'))) return
             // 扫描路径可能是 /mnt/media_rw（快），显示路径用 /storage（用户熟悉）
             add(
-              item.startsWith('/')
-                ? item
-                : `${root.display}/${item.slice(2)}`
+              item.startsWith('/') ? item : `${root.display}/${item.slice(2)}`,
             )
           },
-          (kill) => killers.push(kill)
+          (kill) => killers.push(kill),
         )
+        // find 在遇到单个无权限子目录时通常返回 1，但其它可达目录已完整输出；
+        // 把这类预期权限错误当成可缓存结果，真正致命/shell 中断才标记不完整。
+        if (
+          result.timedOut ||
+          result.code === null ||
+          (result.code > 1 && !isExpectedFindError(result.stderr))
+        ) {
+          complete = false
+        }
       } catch {
-        // 单个根失败不影响其它根
+        // 单个根失败不影响本次结果，但这份索引不能当成完整缓存。
+        complete = false
       }
       onProgress(root.display, found)
     }
@@ -1590,16 +1772,22 @@ async function buildFileIndex(
   await Promise.all(workers)
   flush(true)
 
-  // 中途被新的搜索打断：不要保存半截索引，否则下一次搜索会漏文件
+  // 中途被新的搜索打断：连本次查询也不返回半截结果。
   if (aborted() || !entries.length) return null
 
+  const index = { entries, dirs: buildDirSet(entries), at: Date.now() }
+  const completeIndex = complete && !truncated
+
+  // 超时、权限错误或达到容量上限时，只允许本次查询使用这批数据。
+  if (!completeIndex) return { index, complete: false }
+
   try {
-    await fs.outputFile(fileIndexPath(deviceId), entries.join('\n'))
-    const index = { entries, dirs: buildDirSet(entries), at: Date.now() }
+    await writeFileIndex(fileIndexPath(deviceId), entries)
     fileIndexes.set(deviceId, index)
-    return index
+    return { index, complete: true }
   } catch {
-    return null
+    // 写盘失败仍可服务本次搜索，只是不能跨查询复用。
+    return { index, complete: false }
   }
 }
 
@@ -1615,8 +1803,8 @@ async function searchAllDisksWithIndex(
   killers: Array<() => void>,
   aborted: () => boolean,
   offset: number,
-  limit: number
-): Promise<{ files: IFile[]; total: number } | null> {
+  limit: number,
+): Promise<{ files: IFile[]; total: number; partial?: boolean } | null> {
   const emitProgress = (root: string, found: number) => {
     window.sendTo('main', 'searchProgress', {
       deviceId,
@@ -1631,17 +1819,17 @@ async function searchAllDisksWithIndex(
     }
   }
 
-  const cached = loadFileIndex(deviceId)
+  const cached = await loadFileIndex(deviceId)
   if (cached && Date.now() - cached.at < INDEX_TTL) {
     // 命中索引：只查内存，不再碰设备（补元数据一次批量 stat）
-    const hits = searchFileIndex(deviceId, cached, keyword)
+    const hits = await searchFileIndex(deviceId, cached, keyword)
     emitProgress('索引', hits.length)
     const files = hitsToFiles(hits.slice(offset, offset + limit))
     await statSearchHits(deviceId, files)
     return { files, total: hits.length }
   }
 
-  const index = await withIndexLock(() =>
+  const built = await withIndexLock(() =>
     buildFileIndex(
       deviceId,
       currentPath,
@@ -1649,14 +1837,18 @@ async function searchAllDisksWithIndex(
       emitFiles,
       emitProgress,
       killers,
-      aborted
-    )
+      aborted,
+    ),
   )
-  if (index) {
-    const hits = searchFileIndex(deviceId, index, keyword)
+  if (built) {
+    const hits = await searchFileIndex(deviceId, built.index, keyword)
     const files = hitsToFiles(hits.slice(offset, offset + limit))
     await statSearchHits(deviceId, files)
-    return { files, total: hits.length }
+    return {
+      files,
+      total: hits.length,
+      partial: built.complete ? undefined : true,
+    }
   }
 
   // 建索引失败（老设备没有 stat/-exec +）：交给整盘 find 兜底
@@ -1669,14 +1861,15 @@ async function liveSearchAllDisks(
   currentPath: string,
   safeKeyword: string,
   killers: Array<() => void>,
-  aborted: () => boolean
-): Promise<IFile[]> {
+  aborted: () => boolean,
+): Promise<{ files: IFile[]; partial: boolean }> {
   const roots = await getSearchRoots(deviceId, currentPath)
   const mode = await getFindExecMode(deviceId)
   const follow = (await supportsFindFollow(deviceId)) ? '-L ' : ''
 
   const found: IFile[] = []
   const seen = new Set<string>()
+  let partial = false
   const started = Date.now()
   const emit = (root: string) =>
     window.sendTo('main', 'searchProgress', {
@@ -1697,7 +1890,7 @@ async function liveSearchAllDisks(
         let parsed = 0
         const cmd = findCommand(root.scan, safeKeyword, mode, follow, 1000)
 
-        await spawnAdbLines(
+        const result = await spawnAdbLines(
           ['-s', deviceId, 'shell', cmd],
           180000,
           (line) => {
@@ -1714,12 +1907,13 @@ async function liveSearchAllDisks(
               found.push(file)
             }
           },
-          (kill) => killers.push(kill)
+          (kill) => killers.push(kill),
         )
+        if (result.timedOut || result.code !== 0) partial = true
 
         // 输出有内容但一行都没解析出来：说明 ls -ld 格式不认，退回只搜文件名
         if (lines > 0 && parsed === 0) {
-          await searchRootByNames(
+          const fallback = await searchRootByNames(
             deviceId,
             root.scan,
             safeKeyword,
@@ -1727,11 +1921,12 @@ async function liveSearchAllDisks(
             seen,
             found,
             killers,
-            root.display
+            root.display,
           )
+          if (fallback.timedOut) partial = true
         }
       } else {
-        await searchRootByNames(
+        const result = await searchRootByNames(
           deviceId,
           root.scan,
           safeKeyword,
@@ -1739,17 +1934,19 @@ async function liveSearchAllDisks(
           seen,
           found,
           killers,
-          root.display
+          root.display,
         )
+        if (result.timedOut) partial = true
       }
     } catch {
       // 单个根超时/无权限：继续搜下一个根
+      partial = true
     } finally {
       clearInterval(timer)
       emit(root.display)
     }
   }
-  return found
+  return { files: found, partial }
 }
 
 /**
@@ -1763,7 +1960,7 @@ const searchDir: IpcSearchDir = async (
   keyword,
   allDisks,
   offset = 0,
-  limit = 1000
+  limit = 1000,
 ) => {
   const kw = keyword.trim()
   if (!kw) return { files: [], total: 0 }
@@ -1794,10 +1991,17 @@ const searchDir: IpcSearchDir = async (
       if (base) {
         try {
           const result = await spawnAdb(
-            ['-s', deviceId, 'shell', `ls -ld ${shellQuotePath(kw)} 2>/dev/null`],
-            30000
+            [
+              '-s',
+              deviceId,
+              'shell',
+              `ls -ld ${shellQuotePath(kw)} 2>/dev/null`,
+            ],
+            30000,
           )
-          const exact = parseSearchLines(String(result.stdout || '').split('\n'))
+          const exact = parseSearchLines(
+            String(result.stdout || '').split('\n'),
+          )
           if (exact.length) {
             exact[0].name = kw
             return { files: exact, total: 1 }
@@ -1813,15 +2017,16 @@ const searchDir: IpcSearchDir = async (
         const seen = new Set<string>()
 
         if (mode === 'plain') {
-          await searchRootByNames(
+          const result = await searchRootByNames(
             deviceId,
             dir,
             baseKeyword,
             follow,
             seen,
             found,
-            killers
+            killers,
           )
+          if (result.timedOut) throw new Error('搜索超时：结果不完整')
         } else {
           const cmd = findCommand(dir, baseKeyword, mode, follow, 500)
           await spawnAdbLines(
@@ -1835,7 +2040,7 @@ const searchDir: IpcSearchDir = async (
                 found.push(file)
               }
             },
-            (kill) => killers.push(kill)
+            (kill) => killers.push(kill),
           )
         }
 
@@ -1855,23 +2060,25 @@ const searchDir: IpcSearchDir = async (
         killers,
         () => cancelled,
         offset,
-        limit
+        limit,
       )
 
-      const result =
-        page === null
-          ? slicePage(
-              await liveSearchAllDisks(
-                deviceId,
-                target,
-                safeKeyword,
-                killers,
-                () => cancelled
-              ),
-              offset,
-              limit
-            )
-          : page
+      let result: { files: IFile[]; total: number; partial?: boolean }
+      if (page === null) {
+        const live = await liveSearchAllDisks(
+          deviceId,
+          target,
+          safeKeyword,
+          killers,
+          () => cancelled,
+        )
+        result = {
+          ...slicePage(live.files, offset, limit),
+          partial: live.partial || undefined,
+        }
+      } else {
+        result = page
+      }
 
       if (cancelled) return { files: [], total: 0 }
 
@@ -1892,15 +2099,18 @@ const searchDir: IpcSearchDir = async (
       if (mode === 'plain') {
         const files: IFile[] = []
         const seen = new Set<string>()
-        await searchRootByNames(
+        const result = await searchRootByNames(
           deviceId,
           target,
           safeKeyword,
           follow,
           seen,
           files,
-          killers
+          killers,
         )
+        if (result.timedOut) {
+          throw new Error('搜索超时：结果不完整，请缩小范围')
+        }
         if (cancelled) return { files: [], total: 0 }
         return { files, total: files.length }
       }
@@ -1918,7 +2128,7 @@ const searchDir: IpcSearchDir = async (
             files.push(file)
           }
         },
-        (kill) => killers.push(kill)
+        (kill) => killers.push(kill),
       )
 
       if (cancelled) return { files: [], total: 0 }
@@ -1939,7 +2149,7 @@ const searchDir: IpcSearchDir = async (
     }
 
     const q = shellQuotePath(target)
-    const cmd = `${dirsFirst(q)} | grep -iF -- '${safeKeyword}' | head -n 3000`
+    const cmd = `${dirsFirstCommand(q)} | grep -iF -- '${safeKeyword}' | head -n 3000`
     const result = await spawnAdb(['-s', deviceId, 'shell', cmd], 60000)
     const files = parseSearchLines(String(result.stdout || '').split('\n'))
     return { files, total: files.length }
@@ -1991,27 +2201,32 @@ async function readDataDir(deviceId: string, target: string) {
 
 async function readDataAppDir(deviceId: string, target: string) {
   const packages = String(await shell(deviceId, 'pm list packages -f'))
-  const prefix = `package:${target}`
-  const lines = packages
-    .split('\n')
-    .filter((line) => line.trim() !== '' && line.includes(prefix))
-
-  const paths = lines.map((line) => line.slice(prefix.length).split('/'))
+  const prefix = target.endsWith('/') ? target : target + '/'
+  const paths = parsePackageListing(packages)
+    .filter((entry) => entry.path.startsWith(prefix))
+    .map((entry) => entry.path.slice(prefix.length).split('/').filter(Boolean))
   const stat = await statFile(deviceId, '/data')
 
   const result: any[] = []
+  const seen = new Set<string>()
   for (const segments of paths) {
+    if (!segments.length) continue
     if (segments.length > 1) {
-      result.push({
-        name: segments[0],
-        directory: true,
-        mtime: stat.mtime,
-        mode: stat.mode,
-        size: stat.size,
-      })
+      if (!seen.has(segments[0])) {
+        seen.add(segments[0])
+        result.push({
+          name: segments[0],
+          directory: true,
+          mtime: stat.mtime,
+          mode: stat.mode,
+          size: stat.size,
+        })
+      }
     } else if (segments[0].includes('.apk')) {
       const name = segments[0].split('.apk')[0] + '.apk'
-      const apkStat = await statFile(deviceId, target + name)
+      if (seen.has(name)) continue
+      seen.add(name)
+      const apkStat = await statFile(deviceId, prefix + name)
       result.push({
         name,
         directory: false,
@@ -2060,7 +2275,7 @@ async function fileShell(
   devicePath: string,
   dest?: string,
   checked = false,
-  timeoutMs = 15000
+  timeoutMs = 15000,
 ) {
   const exec = checked ? shellChecked : shell
 
@@ -2074,9 +2289,9 @@ async function fileShell(
       return exec(
         deviceId,
         `run-as ${shellQuotePath(pkg)} ${cmd} ${shellQuotePath(
-          devicePath
+          devicePath,
         )}${dest ? ' ' + shellQuotePath(dest) : ''}`,
-        timeoutMs
+        timeoutMs,
       )
     }
   }
@@ -2084,31 +2299,39 @@ async function fileShell(
   return exec(
     deviceId,
     `${cmd} ${shellQuotePath(devicePath)}${dest ? ' ' + shellQuotePath(dest) : ''}`,
-    timeoutMs
+    timeoutMs,
   )
 }
 
-const statFile: IpcStatFile = async (deviceId, devicePath) => {
-  // /data/data 下非 root：run-as 走 ls -ld，解析不了就直接报错
-  if (devicePath.startsWith('/data/data/') && !(await isRooted(deviceId))) {
-    const ls = await fileShell(deviceId, 'ls -ld', devicePath)
-    const item = parseLsLine(String(ls).trim())
-    if (!item) throw new Error(`Failed to stat file: ${devicePath}`)
-    return {
-      size: item.size,
-      mtime: item.mtime,
-      directory: item.directory,
-      mode: item.mode,
-    }
-  }
-
-  const device = await client.getDevice(deviceId)
-  const stat = await device.stat(devicePath)
+async function statViaLs(deviceId: string, devicePath: string) {
+  const ls = await fileShell(deviceId, 'ls -ld', devicePath)
+  const item = parseLsLine(String(ls).trim())
+  if (!item) throw new Error(`Failed to stat file: ${devicePath}`)
   return {
-    size: stat.size,
-    mtime: new Date(stat.mtimeMs),
-    directory: !stat.isFile(),
-    mode: stat.mode,
+    size: item.size,
+    mtime: item.mtime,
+    directory: item.directory,
+    mode: item.mode,
+  }
+}
+
+const statFile: IpcStatFile = async (deviceId, devicePath) => {
+  const device = await client.getDevice(deviceId)
+  try {
+    // /data/data 下非 root 需要 run-as；其它路径的 sync STAT 出错时也会回退 ls
+    const stat = await device.stat(devicePath)
+    return {
+      size: stat.size,
+      mtime: new Date(stat.mtimeMs),
+      directory: !stat.isFile(),
+      mode: stat.mode,
+    }
+  } catch (e) {
+    try {
+      return await statViaLs(deviceId, devicePath)
+    } catch {
+      throw e
+    }
   }
 }
 

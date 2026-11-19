@@ -6,9 +6,12 @@ import { resolve } from 'node:path'
 cd('dist')
 
 const pkg = await fs.readJson('package.json')
+const args = process.argv.slice(2)
 
 const config = {
   appId: pkg.appId,
+  electronVersion: pkg.electronVersion,
+  npmRebuild: false,
   directories: {
     output: `../release/${pkg.version}`,
   },
@@ -56,6 +59,11 @@ const config = {
   },
 }
 
+const electronDist = resolve(__dirname, '../node_modules/electron/dist')
+if (await fs.pathExists(electronDist)) {
+  config.electronDist = electronDist
+}
+
 // 在 mac 上交叉打 Windows 包时：rcedit 要 wine、makensis 是 x86_64，
 // 这里关掉 rcedit 并改用 resedit 补图标/版本（Windows runner 上仍走原生 rcedit）。
 // 注意 pack.mjs 已经 cd 到 dist，afterPack 必须给绝对路径。
@@ -65,12 +73,13 @@ if (!isWindows) {
 }
 
 if (isMac) {
-  const args = process.argv.slice(2)
   const entitlements = {
     entitlements: 'build/entitlements.mas.plist',
     entitlementsInherit: 'build/entitlements.mas.inherit.plist',
   }
-  if (args.includes('--mas-dev')) {
+  if (args.includes('--dir')) {
+    config.mac.target = ['dir']
+  } else if (args.includes('--mas-dev')) {
     config.mac.target = [
       {
         target: 'mas-dev',

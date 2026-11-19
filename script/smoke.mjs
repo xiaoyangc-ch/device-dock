@@ -42,7 +42,7 @@ async function waitForApp() {
       const page = targets.find(
         (t) =>
           (t.url || '').includes('index.html') &&
-          !(t.url || '').includes('page=')
+          !(t.url || '').includes('page='),
       )
       if (page) return page
     } catch {
@@ -82,7 +82,7 @@ async function connect(target) {
           m.params.args
             .map((a) => a.value ?? a.description ?? a.type)
             .join(' ')
-            .split('\n')[0]
+            .split('\n')[0],
       )
     }
   }
@@ -96,7 +96,9 @@ async function connect(target) {
       awaitPromise: true,
     })
     if (r.exceptionDetails) {
-      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text)
+      throw new Error(
+        r.exceptionDetails.exception?.description || r.exceptionDetails.text,
+      )
     }
     return r.result.value
   }
@@ -131,10 +133,11 @@ const readPanelExpr = `(() => {
 async function main() {
   if (exe) {
     profile = path.join(os.tmpdir(), `devicedock-smoke-${process.pid}`)
-    child = spawn(path.resolve(exe), [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profile}`,
-    ], { stdio: 'ignore', windowsHide: true })
+    child = spawn(
+      path.resolve(exe),
+      [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`],
+      { stdio: 'ignore', windowsHide: true },
+    )
     console.log(`启动 ${exe}（profile: ${profile}）`)
   }
 
@@ -146,7 +149,7 @@ async function main() {
     const started = Date.now()
     while (Date.now() - started < timeoutMs) {
       const labels = await c.evaluate(
-        `[...document.querySelectorAll('aside nav button')].map((e) => e.innerText.trim()).filter(Boolean)`
+        `[...document.querySelectorAll('aside nav button')].map((e) => e.innerText.trim()).filter(Boolean)`,
       )
       if (Array.isArray(labels) && labels.length) return labels
       await sleep(500)
@@ -160,7 +163,9 @@ async function main() {
   // 空列表绝不能被当成「全部通过」：侧栏没渲染、选择器改了就完全没测到东西
   if (!labels.length) {
     c.ws.close()
-    console.log('\n冒烟失败：侧栏没有发现任何页面（界面未渲染或导航选择器失效）')
+    console.log(
+      '\n冒烟失败：侧栏没有发现任何页面（界面未渲染或导航选择器失效）',
+    )
     return 1
   }
 
@@ -177,17 +182,22 @@ async function main() {
     const panel = await c.evaluate(readPanelExpr)
     const errors = c.errors.splice(0, c.errors.length)
     // 白屏/导航没生效时 panel 存在但内容为空：不能算通过
-    const empty = !panel || panel.textLen < 10
+    const noDevicePlaceholder =
+      panel &&
+      (panel.sample === '未连接设备' ||
+        panel.sample.startsWith('终端 1 快捷命令'))
+    const empty = !panel || (panel.textLen < 10 && !noDevicePlaceholder)
     // --strict：数据页必须真的加载出内容，光「不崩」不算过
     let dataShort = ''
     if (strict && panel && !empty) {
       const m = panel.sample.match(/共 (\d+) (个应用|个进程)/)
       if (m && Number(m[1]) === 0) dataShort = `数据未加载：${m[0]}`
     }
-    const bad = empty || (panel && panel.crashed) || errors.length > 0 || !!dataShort
+    const bad =
+      empty || (panel && panel.crashed) || errors.length > 0 || !!dataShort
     if (bad) failed++
     console.log(
-      `${label}: ${JSON.stringify(panel)}${dataShort ? ' ' + dataShort : ''}${errors.length ? ' errors=' + JSON.stringify(errors.slice(0, 4)) : ''}`
+      `${label}: ${JSON.stringify(panel)}${dataShort ? ' ' + dataShort : ''}${errors.length ? ' errors=' + JSON.stringify(errors.slice(0, 4)) : ''}`,
     )
   }
   c.ws.close()
@@ -196,7 +206,9 @@ async function main() {
     console.log(`\n冒烟失败：${failed} 个页面有问题`)
     return 1
   }
-  console.log('\n冒烟通过：所有页面无 console error / 无异常 / 无「此页面出错」')
+  console.log(
+    '\n冒烟通过：所有页面无 console error / 无异常 / 无「此页面出错」',
+  )
   return 0
 }
 

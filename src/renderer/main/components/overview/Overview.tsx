@@ -32,6 +32,7 @@ export default observer(function Overview() {
 
   // 切设备时旧请求可能后到：只认最后一次，别让上一台的数据盖住新设备
   const loadSeq = useRef(0)
+  const rootRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { device } = store
 
   // 面板切设备时不卸载：deps 必须带设备，否则永远显示上一台的数据。
@@ -40,6 +41,10 @@ export default observer(function Overview() {
   useEffect(() => {
     setOverview({})
     refresh(true)
+    return () => {
+      if (rootRefreshTimer.current) clearTimeout(rootRefreshTimer.current)
+      rootRefreshTimer.current = null
+    }
   }, [device?.id, device?.type])
 
   async function refresh(force = false, noCache = false) {
@@ -63,7 +68,10 @@ export default observer(function Overview() {
     try {
       await main.root(device.id)
       // adbd 重启要 1-2 秒：等它回来再刷新，否则读到旧状态
-      setTimeout(() => refresh(), 2000)
+      rootRefreshTimer.current = setTimeout(() => {
+        rootRefreshTimer.current = null
+        refresh()
+      }, 2000)
     } catch {
       notify(t('rootModeErr'), { icon: 'error' })
     }

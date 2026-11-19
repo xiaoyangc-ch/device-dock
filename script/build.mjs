@@ -3,9 +3,8 @@ import { execSync } from 'node:child_process'
 const pkg = await fs.readJson('package.json')
 const electron = pkg.devDependencies.electron
 delete pkg.devDependencies
-pkg.devDependencies = {
-  electron,
-}
+delete pkg.allowScripts
+pkg.electronVersion = electron
 delete pkg.scripts
 pkg.scripts = {
   start: 'electron main/index.js',
@@ -22,6 +21,8 @@ await fs.emptyDir('dist/build')
 await fs.emptyDir('dist/resources')
 await fs.copy('build', 'dist/build')
 await fs.copy('resources', 'dist/resources')
+await fs.remove('dist/node_modules')
+await fs.remove('dist/package-lock.json')
 cd('dist')
 
 await fs.writeJson('package.json', pkg, {

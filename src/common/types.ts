@@ -133,7 +133,7 @@ export type IpcSearchDir = (
   /** 分页：默认 0/1000；索引搜索支持翻页看全部结果 */
   offset?: number,
   limit?: number
-) => Promise<{ files: IFile[]; total: number }>
+) => Promise<{ files: IFile[]; total: number; partial?: boolean }>
 export type IpcCreateDir = (deviceId: string, path: string) => Promise<void>
 export type IpcDeleteDir = IpcCreateDir
 export type IpcDeleteFile = IpcCreateDir
@@ -146,7 +146,8 @@ export type IpcPushFile = (
 export type IpcPullFile = (
   deviceId: string,
   src: string,
-  dest: string
+  dest: string,
+  options?: { overwrite?: boolean }
 ) => Promise<void>
 export type IpcEnablePackage = (deviceId: string, pkg: string) => Promise<void>
 export type IpcDisablePackage = IpcEnablePackage
@@ -154,6 +155,10 @@ export type IpcGetPackages = (
   deviceId: string,
   system?: boolean
 ) => Promise<string[]>
+export type IpcGetPackageApkPath = (
+  deviceId: string,
+  packageName: string
+) => Promise<string>
 export type IpcInstallPackage = (
   deviceId: string,
   apkPath: string
@@ -173,8 +178,7 @@ export type IpcGetTopPackage = (deviceId: string) => Promise<{
 export type IpcGetProcesses = (deviceId: string) => Promise<IProcess[]>
 export type IpcGetFileUrl = (
   deviceId: string,
-  path: string,
-  port?: number
+  path: string
 ) => Promise<string>
 
 export type IpcScanLanDevices = () => Promise<{
@@ -235,7 +239,9 @@ export type IpcRecordingChunk = (
   id: string,
   data: Uint8Array
 ) => Promise<void>
-export type IpcRecordingStop = (id: string) => Promise<{ path: string }>
+export type IpcRecordingStop = (
+  id: string
+) => Promise<{ path: string; ok: boolean; error?: string }>
 
 export type IpcRebootDevice = (deviceId: string) => Promise<void>
 

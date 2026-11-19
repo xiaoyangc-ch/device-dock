@@ -16,6 +16,7 @@ import {
   IpcClearPackage,
   IpcDisablePackage,
   IpcEnablePackage,
+  IpcGetPackageApkPath,
   IpcGetPackageIcon,
   IpcGetPackages,
   IpcGetTopPackage,
@@ -25,6 +26,13 @@ import {
   IpcUninstallPackage,
 } from 'common/types'
 import { assertPackageName } from 'common/guards'
+import { LruCache } from 'common/lru'
+import {
+  parseCurrentUser,
+  parsePackageListing,
+  parsePackagePaths,
+  parseTopPackage,
+} from './packageParse'
 
 let client: Client
 
@@ -36,23 +44,32 @@ let client: Client
  * Android 6 没有 `am get-current-user`（7.0 才加），失败时返回一行错误文本。
  * 拿不到就返回 null，调用方省掉 --user，不要把 NaN 拼进命令。
  */
-let currentUserCache: Map<string, Promise<number | null>> | null = null
+const CURRENT_USER_TTL = 30 * 1000
+let currentUserCache: Map<
+  string,
+  { at: number; pending: Promise<number | null> }
+> | null = null
 function getCurrentUser(deviceId: string) {
   if (!currentUserCache) currentUserCache = new Map()
-  let pending = currentUserCache.get(deviceId)
-  if (!pending) {
-    pending = (async () => {
-      try {
-        const out = await shell(deviceId, 'am get-current-user')
-        const value = parseInt(String(out).split('\n')[0].trim(), 10)
-        return Number.isFinite(value) ? value : null
-      } catch {
-        return null
-      }
-    })()
-    currentUserCache.set(deviceId, pending)
-    pending.catch(() => currentUserCache?.delete(deviceId))
+  const cached = currentUserCache.get(deviceId)
+  if (cached && Date.now() - cached.at < CURRENT_USER_TTL) {
+    return cached.pending
   }
+
+  const pending = (async () => {
+    try {
+      const out = await shell(deviceId, 'am get-current-user')
+      return parseCurrentUser(out)
+    } catch {
+      return null
+    }
+  })()
+  currentUserCache.set(deviceId, { at: Date.now(), pending })
+  pending.catch(() => {
+    if (currentUserCache?.get(deviceId)?.pending === pending) {
+      currentUserCache.delete(deviceId)
+    }
+  })
   return pending
 }
 
@@ -65,27 +82,42 @@ export const getPackages: IpcGetPackages = async (deviceId, system = true) => {
   if (hit && Date.now() - hit.at < PKG_CACHE_MS) return hit.list
 
   const user = await getCurrentUser(deviceId)
-  const args = [
-    'pm',
-    'list',
-    'packages',
-    system ? '' : '-3',
-    user === null ? '' : `--user ${user}`,
-  ]
-    .filter(Boolean)
-    .join(' ')
-  const out = String(await shell(deviceId, args))
+  const filter = system ? '' : '-3'
+  const commands = [
+    user === null ? '' : `pm list packages ${filter} --user ${user}`,
+    `pm list packages ${filter}`,
+    user === null ? '' : `pm list packages --user ${user} ${filter}`,
+  ].filter(Boolean)
 
-  // 只认 package: 行：设备不认某个选项时会回一行 Error，
-  // 直接 slice(8) 会把错误文本当成包名
-  const list: string[] = []
-  for (const raw of out.split('\n')) {
-    const matched = raw.trim().match(/^package:(\S+)/)
-    if (matched) list.push(matched[1])
+  // Huawei/部分定制 pm 可能支持 get-current-user，却不支持 list --user；
+  // 此时不能把错误输出解析成空列表并缓存，否则应用页会直接空白。
+  let list: string[] = []
+  let lastError = ''
+  for (const command of [...new Set(commands)]) {
+    try {
+      const out = await shell(deviceId, command)
+      const entries = parsePackageListing(out)
+      if (entries.length) {
+        list = entries.map((entry) => entry.name)
+        break
+      }
+      if (String(out).trim()) lastError = String(out).trim()
+    } catch (e: any) {
+      lastError = e?.message || String(e)
+    }
+  }
+  if (!list.length) {
+    throw new Error('设备未返回应用列表' + (lastError ? `：${lastError}` : ''))
   }
 
   pkgCache.set(key, { at: Date.now(), list })
   return list
+}
+
+export function clearPackageListCache(deviceId: string) {
+  for (const key of [...pkgCache.keys()]) {
+    if (key.startsWith(deviceId + ':')) pkgCache.delete(key)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,12 +144,16 @@ const installPackage: IpcInstallPackage = async (deviceId, apkPath) => {
   const device = await client.getDevice(deviceId)
   await device.install(apkPath)
   // 新装包的 versionCode 变了：立刻让应用页重新取，不等 5 秒缓存
+  clearPackageListCache(deviceId)
+  clearIconCache(deviceId)
   clearPackageCaches(deviceId)
 }
 
 const uninstallPackage: IpcUninstallPackage = async (deviceId, pkg) => {
   const device = await client.getDevice(deviceId)
   await device.uninstall(pkg)
+  clearPackageListCache(deviceId)
+  clearIconCache(deviceId)
   clearPackageCaches(deviceId)
 }
 
@@ -139,7 +175,7 @@ const enablePackage: IpcEnablePackage = async (deviceId, pkg) => {
 async function getMainComponent(deviceId: string, pkg: string) {
   assertPackageName(pkg)
   const out = String(
-    await shell(deviceId, `dumpsys package ${pkg} | grep -A 1 MAIN`)
+    await shell(deviceId, `dumpsys package ${pkg} | grep -A 1 MAIN`),
   )
   const pattern = new RegExp(`${pkg.replace(/\./g, '\\.')}/([\\w.$]+)`)
   for (const raw of out.split('\n')) {
@@ -153,8 +189,13 @@ async function getMainComponent(deviceId: string, pkg: string) {
 // 图标：pull APK → 解压挑最大 launcher 图 → 缓存
 // ---------------------------------------------------------------------------
 
-const iconMem = new Map<string, string>()
+const iconMem = new LruCache<string, { url: string }>({
+  maxEntries: 200,
+  maxBytes: 16 * 1024 * 1024,
+  weight: (entry) => Buffer.byteLength(entry.url, 'utf8'),
+})
 const iconPending = new Map<string, Promise<string>>()
+const iconEpoch = new Map<string, number>()
 
 function iconDir() {
   return path.join(app.getPath('userData'), 'icon-cache')
@@ -166,16 +207,9 @@ function iconCacheFile(deviceId: string, pkg: string) {
   return path.join(iconDir(), encodeURIComponent(`${deviceId}|${pkg}`) + '.txt')
 }
 
-// 每条 base64 最多 2MB，没有上限会一直涨
-const ICON_MEM_MAX = 200
-
 function rememberIcon(key: string, url: string) {
-  iconMem.set(key, url)
-  while (iconMem.size > ICON_MEM_MAX) {
-    const oldest = iconMem.keys().next().value
-    if (oldest === undefined) break
-    iconMem.delete(oldest)
-  }
+  // 每条 base64 最多约 2.7MB；LRU 同时限制条目数和总字节数。
+  iconMem.set(key, { url })
 }
 
 /** 给 APK 里的图标候选打分：mipmap 优先、launcher 命名优先、高 dpi 优先、方形优先。 */
@@ -196,7 +230,9 @@ function iconScore(name: string, size: number) {
   return score
 }
 
-function readApkIcon(apk: string): Promise<{ data: Buffer; mime: string } | null> {
+function readApkIcon(
+  apk: string,
+): Promise<{ data: Buffer; mime: string } | null> {
   return new Promise((resolve) => {
     // autoClose: false 是必须的：lazyEntries 读到 end 时 yauzl 会自动关掉文件，
     // 后面再 openReadStream 就会报 closed
@@ -258,17 +294,60 @@ function readApkIcon(apk: string): Promise<{ data: Buffer; mime: string } | null
 }
 
 async function readIconCache(deviceId: string, pkg: string) {
-  const key = `${deviceId}|${pkg}`
+  const apk = await getPackageApkPath(deviceId, pkg)
+  if (!apk) return { apk: '', identity: '', url: '' }
+
+  let identity = ''
+  try {
+    const stat = await client.getDevice(deviceId).stat(apk)
+    identity = `${stat.size}:${stat.mtimeMs}`
+  } catch {
+    return { apk, identity: '', url: '' }
+  }
+
+  const key = `${deviceId}|${pkg}|${identity}`
   const hit = iconMem.get(key)
-  if (hit) return hit
+  if (hit) {
+    return { apk, identity, url: hit.url }
+  }
   try {
     const text = await fs.readFile(iconCacheFile(deviceId, pkg), 'utf8')
-    if (text.startsWith('data:image/')) {
-      rememberIcon(key, text)
-      return text
+    const cached = JSON.parse(text) as { identity?: string; url?: string }
+    if (cached.identity === identity && cached.url?.startsWith('data:image/')) {
+      rememberIcon(key, cached.url)
+      return { apk, identity, url: cached.url }
     }
   } catch {
     // 没缓存
+  }
+  return { apk, identity, url: '' }
+}
+
+/**
+ * 不依赖设备端 dex 获取 APK 路径。
+ * Huawei/HarmonyOS 上 dex 取 PackageInfo 失败时，应用列表仍可用，导出也必须可用。
+ */
+export const getPackageApkPath: IpcGetPackageApkPath = async (
+  deviceId,
+  pkg,
+) => {
+  assertPackageName(pkg)
+  const commands = [
+    `pm path ${pkg}`,
+    `cmd package path ${pkg}`,
+    `pm list packages -f ${pkg}`,
+  ]
+  for (const command of commands) {
+    try {
+      const paths = parsePackagePaths(await shell(deviceId, command))
+      if (paths.length) {
+        return (
+          paths.find((item) => /(?:^|\/)base\.apk$/i.test(item)) || paths[0]
+        )
+      }
+    } catch {
+      // 老系统没有 cmd，或某个选项在当前固件不可用：继续尝试下一种
+    }
   }
   return ''
 }
@@ -276,8 +355,12 @@ async function readIconCache(deviceId: string, pkg: string) {
 /** 设备移除 / 卸载重装时清掉该设备的图标缓存（内存 + 磁盘） */
 export function clearIconCache(deviceId: string) {
   const prefix = deviceId + '|'
+  iconEpoch.set(deviceId, (iconEpoch.get(deviceId) || 0) + 1)
   for (const key of [...iconMem.keys()]) {
     if (key.startsWith(prefix)) iconMem.delete(key)
+  }
+  for (const key of [...iconPending.keys()]) {
+    if (key.startsWith(prefix)) iconPending.delete(key)
   }
   iconDirCleanup(deviceId)
 }
@@ -298,27 +381,20 @@ function iconDirCleanup(deviceId: string) {
 export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
   // 包名会拼进 pm 命令和本地缓存文件名，先卡死字符集
   assertPackageName(pkg)
-  const key = `${deviceId}|${pkg}`
-
   const cached = await readIconCache(deviceId, pkg)
-  if (cached) return cached
+  if (cached.url) return cached.url
+  const key = `${deviceId}|${pkg}|${cached.identity}`
+  const epoch = iconEpoch.get(deviceId) || 0
   const running = iconPending.get(key)
   if (running) return running
 
   const task = (async () => {
-    const out = String(
-      await shell(deviceId, `pm path ${pkg}`).catch(() => '')
-    )
-    const apk = out
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line.startsWith('package:'))
-      ?.slice('package:'.length)
+    const apk = cached.apk
     if (!apk) return ''
 
     const tmp = path.join(
       app.getPath('temp'),
-      `devicedock-icon-${Date.now()}-${Math.random().toString(36).slice(2)}.apk`
+      `devicedock-icon-${Date.now()}-${Math.random().toString(36).slice(2)}.apk`,
     )
     try {
       await spawnAdb(['-s', deviceId, 'pull', apk, tmp], 120000)
@@ -326,9 +402,15 @@ export const getPackageIcon: IpcGetPackageIcon = async (deviceId, pkg) => {
       if (!icon) return ''
 
       const url = `data:${icon.mime};base64,${icon.data.toString('base64')}`
+      if ((iconEpoch.get(deviceId) || 0) !== epoch) return ''
       rememberIcon(key, url)
       fs.mkdir(iconDir(), { recursive: true })
-        .then(() => fs.writeFile(iconCacheFile(deviceId, pkg), url))
+        .then(() =>
+          fs.writeFile(
+            iconCacheFile(deviceId, pkg),
+            JSON.stringify({ identity: cached.identity, url }),
+          ),
+        )
         .catch(() => undefined)
       return url
     } catch {
@@ -364,26 +446,28 @@ export const getTopPackage: IpcGetTopPackage = (deviceId) => {
   }
 
   const promise = (async () => {
-    // 只需要 top-activity 那一行：全量 dumpsys activity 输出 144KB / 0.19 秒，
-    // 性能页每 2 秒轮询一次，光传输就占掉不少。先让设备端 grep 只回一行，
-    // 个别固件没有 grep 或输出为空时再退回全量解析。
+    // Huawei/HiSilicon 固件常用 mResumedActivity/mFocusedApp，
+    // AOSP/其他固件则常用 top-activity；先让设备端 grep 只回匹配行。
     let out = String(
-      await shell(deviceId, "dumpsys activity 2>/dev/null | grep -m1 top-activity")
+      await shell(
+        deviceId,
+        "dumpsys activity 2>/dev/null | grep -m1 'top-activity\\|mResumedActivity\\|mFocusedActivity\\|mFocusedApp'",
+      ),
     )
-    if (!out.trim()) {
-      out = String(await shell(deviceId, 'dumpsys activity'))
-    }
-    const line = out
-      .split('\n')
-      .find((item) => item.includes('top-activity'))
-    if (!line) return { name: '', pid: 0 }
+    let parsed = parseTopPackage(out)
+    if (parsed.name) return parsed
 
-    // 形如 `... 1234:com.xxx/.MainActivity ...`：倒数第二个字段是 pid:name
-    const parts = line.trim().split(/\s+/)
-    const token = parts[parts.length - 2] || ''
-    const [pidText, rawName = ''] = token.split(':')
-    const name = rawName.includes('/') ? rawName.split('/')[0] : rawName
-    return { name, pid: parseInt(pidText, 10) || 0 }
+    out = String(
+      await shell(
+        deviceId,
+        "dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus\\|mFocusedApp'",
+      ),
+    )
+    parsed = parseTopPackage(out)
+    if (parsed.name) return parsed
+
+    out = String(await shell(deviceId, 'dumpsys activity'))
+    return parseTopPackage(out)
   })()
 
   const entry = { at: Date.now(), deviceId, promise }
@@ -398,6 +482,7 @@ export async function init(c: Client) {
   client = c
 
   handleEvent('getPackages', getPackages)
+  handleEvent('getPackageApkPath', getPackageApkPath)
   handleEvent('getPackageIcon', getPackageIcon)
   handleEvent('stopPackage', stopPackage)
   handleEvent('startPackage', startPackage)

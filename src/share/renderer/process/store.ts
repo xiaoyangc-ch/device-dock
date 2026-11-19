@@ -30,16 +30,20 @@ class Store extends BaseStore {
   }
 
   async init() {
-    this.refresh()
+    void this.refresh()
     // 2 秒一刷：进程 CPU 是采样值，太密会在任务管理器里看倒自己
-    setInterval(() => this.refresh(), 2000)
+    setInterval(() => void this.refresh(), 2000)
   }
 
   async refresh() {
-    const processes = await main.getProcessData()
-    runInAction(() => {
-      this.processes = processes
-    })
+    try {
+      const processes = await main.getProcessData()
+      runInAction(() => {
+        this.processes = processes
+      })
+    } catch {
+      // 采样失败时保留上一份快照，下一轮继续。
+    }
   }
 }
 

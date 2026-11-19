@@ -17,6 +17,8 @@ import isStr from 'licia/isStr'
 import truncate from 'licia/truncate'
 
 const MAX_TEXT = 100000
+// UTF-8 最多 4 字节/字符，取 400 KB 足够生成 10 万字符，也不会把整个大日志读进内存。
+const MAX_TEXT_BYTES = 400 * 1024
 
 interface IProps {
   file?: IFile
@@ -25,7 +27,7 @@ interface IProps {
 
 export default function Preview(props: IProps) {
   const { file, url } = props
-  const [audio, setAudio] = useState<HTMLAudioElement>(new Audio())
+  const [audio, setAudio] = useState<HTMLAudioElement>(() => new Audio())
 
   let preview: JSX.Element = (
     <div className={Style.previewEmpty}>{t('noPreview')}</div>
@@ -70,10 +72,19 @@ function TextViewer(props: { url: string }) {
 
   useEffect(() => {
     let alive = true
+    const controller = new AbortController()
     setText('')
 
     axios
-      .get(props.url)
+      .get(props.url, {
+        responseType: 'text',
+        signal: controller.signal,
+        timeout: 8000,
+        maxContentLength: 512 * 1024,
+        headers: {
+          Range: `bytes=0-${MAX_TEXT_BYTES - 1}`,
+        },
+      })
       .then((response) => {
         if (!alive) return
         if (!isStr(response.data)) {
@@ -94,6 +105,7 @@ function TextViewer(props: { url: string }) {
 
     return () => {
       alive = false
+      controller.abort()
     }
   }, [props.url])
 

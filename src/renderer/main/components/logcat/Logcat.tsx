@@ -312,7 +312,17 @@ export default observer(function Logcat() {
             logcatRef.current = instance
             const pending = pendingEntriesRef.current
             pendingEntriesRef.current = []
-            for (const entry of pending) instance.append(entry)
+            for (const entry of pending) {
+              instance.append(entry)
+              entriesRef.current.push(entry)
+            }
+            if (entriesRef.current.length > MAX_ENTRIES) {
+              entriesRef.current.splice(
+                0,
+                entriesRef.current.length - MAX_ENTRIES
+              )
+            }
+            setEntryCount(entriesRef.current.length)
           }}
         />
         {entryCount === 0 && (

@@ -1,7 +1,12 @@
 // 3.0 真实交互测试：用 CDP 的鼠标事件点击文件页/侧栏，不走 DOM 伪造事件。
 // 覆盖：双击进目录、返回、单击选中、搜索、设备切换。
 // 用法：npm run start:debug 之后 node script/ui-3.0-e2e.mjs
-const port = 9334
+const argv = process.argv.slice(2)
+const arg = (name, def) => {
+  const i = argv.indexOf('--' + name)
+  return i >= 0 && argv[i + 1] ? argv[i + 1] : def
+}
+const port = Number(arg('port', 9334))
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function target() {
@@ -89,6 +94,7 @@ async function main() {
   await c.send('Runtime.enable')
   await c.send('Page.enable')
   await sleep(800)
+  let failed = 0
 
   const box = (expr) =>
     c.evaluate(`(() => {
@@ -122,14 +128,25 @@ async function main() {
     return true
   }
 
+  const requiredClick = async (expr, label, count = 1) => {
+    const ok = await click(expr, count)
+    if (!ok) {
+      failed++
+      console.error(`缺少可点击元素：${label}`)
+    }
+    return ok
+  }
+
   // 可见面板里的 DOM 查询（面板保活，隐藏面板还留在 DOM 里）
   const visible = `[...document.querySelectorAll('[class*="panels"] > div')].find((e) => getComputedStyle(e).visibility !== 'hidden')`
 
   const nav = async (label) => {
-    await click(
-      `[...document.querySelectorAll('aside nav button')].find((e) => e.innerText.trim() === ${JSON.stringify(label)})`
+    const ok = await requiredClick(
+      `[...document.querySelectorAll('aside nav button')].find((e) => ['文件', 'File'].includes(e.innerText.trim()))`,
+      label
     )
     await sleep(1800)
+    return ok
   }
 
   const crumbs = () =>
@@ -146,45 +163,85 @@ async function main() {
     )
 
   // 1. 文件页：双击第一个目录
-  await nav('文件')
+  if (!(await nav('文件'))) throw new Error('无法进入文件页')
+
+  // 文件页默认进入当前设备的内部存储，不一定在根目录。
+  await requiredClick(
+    `(${visible}).querySelector('[class*="crumbs"] button')`,
+    '根目录'
+  )
+  await sleep(1500)
+
   const firstDir = await c.evaluate(`(() => {
     const panel = ${visible}
     const node = [...panel.querySelectorAll('.luna-data-grid-node')]
-      .find((n) => n.innerText.includes('acct'))
-    return node ? node.innerText.replace(/\\s+/g, ' ').trim().slice(0, 40) : null
+      .find((n) => n.querySelector('.icon-folder'))
+    return node ? node.querySelector('[class*="name-text"]')?.innerText.trim() : null
   })()`)
-  const dirClicked = await click(
-    `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.innerText.includes('acct'))?.querySelector('[class*="name-text"]')`,
+  if (!firstDir) throw new Error('根目录没有可测试的文件夹')
+
+  const dirClicked = await requiredClick(
+    `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.querySelector('.icon-folder'))?.querySelector('[class*="name-text"]')`,
+    `文件夹 ${firstDir}`,
     2
   )
   await sleep(2000)
   console.log('双击目录:', firstDir, 'clicked=', dirClicked, '路径=', await crumbs())
+  if (!(await crumbs()).includes(firstDir)) {
+    failed++
+    console.error('双击文件夹后路径没有进入目标目录')
+  }
 
   // 2. 返回
-  const backClicked = await click(
-    `(${visible}).querySelector('[class*="navBtns"] button')`
+  const backClicked = await requiredClick(
+    `(${visible}).querySelector('[class*="navBtns"] button')`,
+    '返回'
   )
   await sleep(1500)
   console.log('返回:', backClicked, '路径=', await crumbs())
+  if ((await crumbs()).includes(firstDir + '/')) {
+    failed++
+    console.error('返回后仍停留在子目录')
+  }
 
   // 3. 单击文件，检查器应显示详情
-  await click(
-    `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.innerText.includes('bugreports'))?.querySelector('[class*="name-text"]')`
-  )
-  await sleep(1200)
-  console.log('选中 bugreports，检查器=', await inspector())
+  const hasFile = await c.evaluate(`!![...(${visible}).querySelectorAll('.luna-data-grid-node')]
+    .find((n) => !n.querySelector('.icon-folder'))`)
+  if (hasFile) {
+    await requiredClick(
+      `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => !n.querySelector('.icon-folder'))?.querySelector('[class*="name-text"]')`,
+      '文件行'
+    )
+    await sleep(1200)
+    const text = await inspector()
+    console.log('选中文件，检查器=', text)
+    if (!text) {
+      failed++
+      console.error('选中文件后检查器为空')
+    }
+  }
 
-  // 4. 搜索，再选中第一条结果
+  // 4. 搜索当前目录里确定存在的文件夹名
   await c.evaluate(`(() => {
     const input = (${visible}).querySelector('input[class*="searchInput"]')
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-    setter.call(input, 'init')
+    setter.call(input, ${JSON.stringify(firstDir)})
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })()`)
   await sleep(2200)
-  console.log('搜索 init:', await status())
-  await click(
-    `(${visible}).querySelectorAll('.luna-data-grid-node')[0]?.querySelector('[class*="name-text"]')`
+  const searchStatus = await status()
+  console.log('搜索', firstDir, ':', searchStatus)
+  const resultCount = await c.evaluate(
+    `(${visible}).querySelectorAll('.luna-data-grid-node').length`
+  )
+  if (!resultCount) {
+    failed++
+    console.error('搜索确定存在的文件夹却没有结果')
+  }
+
+  await requiredClick(
+    `(${visible}).querySelectorAll('.luna-data-grid-node')[0]?.querySelector('[class*="name-text"]')`,
+    '搜索结果'
   )
   await sleep(1200)
   console.log('搜索选中，检查器=', await inspector())
@@ -207,18 +264,21 @@ async function main() {
   const pickerCount = await c.evaluate(
     `document.querySelectorAll('[class*="pickerItem"]').length`
   )
-  const second = await c.evaluate(`(() => {
-    const items = [...document.querySelectorAll('[class*="pickerItem"]')]
-    if (items.length < 2) return null
-    return items[1].innerText.replace(/\\s+/g, ' ').trim()
-  })()`)
   if (pickerCount > 1) {
-    // 选第一项（不是当前设备）验证双向切换
-    const first = await c.evaluate(`(() => {
+    const switchIndex = await c.evaluate(`(() => {
       const items = [...document.querySelectorAll('[class*="pickerItem"]')]
-      return items[0].innerText.replace(/\\s+/g, ' ').trim()
+      return items.findIndex(
+        (item) => !item.querySelector('[class*="current"]')
+      )
     })()`)
-    await click(`document.querySelectorAll('[class*="pickerItem"]')[0]`)
+    if (switchIndex < 0) throw new Error('没有找到可切换的另一台设备')
+    const first = await c.evaluate(
+      `document.querySelectorAll('[class*="pickerItem"]')[${switchIndex}].innerText.replace(/\\s+/g, ' ').trim()`
+    )
+    await requiredClick(
+      `document.querySelectorAll('[class*="pickerItem"]')[${switchIndex}]`,
+      '另一台设备'
+    )
     await sleep(3000)
     const now = await c.evaluate(
       `document.querySelector('[class*="nameRow"]')?.innerText.replace(/\\s+/g, ' ').trim() || ''`
@@ -228,20 +288,38 @@ async function main() {
     await sleep(1500)
 
     // 连续两次返回：验证历史索引用 ref 后能各退一步
-    const sdcard = await click(
-      `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.innerText.includes('sdcard'))?.querySelector('[class*="name-text"]')`,
+    await requiredClick(
+      `(${visible}).querySelector('[class*="crumbs"] button')`,
+      '返回根目录'
+    )
+    await sleep(1500)
+    const subdir = await c.evaluate(`(() => {
+      const node = [...(${visible}).querySelectorAll('.luna-data-grid-node')]
+        .find((n) => n.querySelector('.icon-folder'))
+      return node?.querySelector('[class*="name-text"]')?.innerText.trim() || ''
+    })()`)
+    const sdcard = await requiredClick(
+      `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.querySelector('.icon-folder'))?.querySelector('[class*="name-text"]')`,
+      '切换设备后的文件夹',
       2
     )
     await sleep(1800)
-    console.log('进入 sdcard:', sdcard, '路径=', await crumbs())
-    const sub = await click(
+    console.log('进入文件夹:', subdir, sdcard, '路径=', await crumbs())
+    const sub = await requiredClick(
       `[...(${visible}).querySelectorAll('.luna-data-grid-node')].find((n) => n.querySelector('.icon-folder'))?.querySelector('[class*="name-text"]')`,
+      '二级文件夹',
       2
     )
     await sleep(1800)
     console.log('进入子目录:', sub, '路径=', await crumbs())
-    await click(`(${visible}).querySelector('[class*="navBtns"] button')`)
-    await click(`(${visible}).querySelector('[class*="navBtns"] button')`)
+    await requiredClick(
+      `(${visible}).querySelector('[class*="navBtns"] button')`,
+      '第一次返回'
+    )
+    await requiredClick(
+      `(${visible}).querySelector('[class*="navBtns"] button')`,
+      '第二次返回'
+    )
     await sleep(2200)
     console.log('连点两次返回后路径=', await crumbs())
   } else {
@@ -250,7 +328,9 @@ async function main() {
 
   const errors = c.errors.splice(0, c.errors.length)
   console.log('console errors:', JSON.stringify(errors))
+  failed += errors.length
   c.ws.close()
+  if (failed) throw new Error(`交互测试失败：${failed} 个检查未通过`)
 }
 
 try {

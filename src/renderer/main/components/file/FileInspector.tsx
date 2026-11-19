@@ -180,13 +180,22 @@ export default observer(function FileInspector(props: IProps) {
 
       <div className={Style.actions}>
         {isDir ? (
-          <button
-            className={Style.primary}
-            onClick={() => props.onOpen(file)}
-          >
-            <span className="icon-folder" />
-            {t('openFolder')}
-          </button>
+          <>
+            <button
+              className={Style.primary}
+              onClick={() => props.onOpen(file)}
+            >
+              <span className="icon-folder" />
+              {t('openFolder')}
+            </button>
+            <button
+              className={Style.btn}
+              onClick={() => props.onDownload([file])}
+            >
+              <span className="icon-download" />
+              {t('downloadToLocal')}
+            </button>
+          </>
         ) : (
           <>
             <button

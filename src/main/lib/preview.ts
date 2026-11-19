@@ -28,6 +28,7 @@ interface PreviewSession {
   proc: ChildProcess | null
   stopped: boolean
   failures: number
+  startedAt: number
   pending: Buffer[]
   flush: ReturnType<typeof setTimeout> | null
 }
@@ -59,6 +60,8 @@ function scheduleFlush(target: PreviewSession) {
 function handleExit(target: PreviewSession | null) {
   if (!target || session !== target || target.stopped) return
 
+  // 正常运行满 10 秒后的退出是 screenrecord 时限，不算连续失败。
+  if (Date.now() - target.startedAt >= 10_000) target.failures = 0
   target.failures++
   if (target.failures >= MAX_FAILURES) {
     logger.warn('preview stream failed, fall back to png', target.deviceId)
@@ -90,12 +93,11 @@ function spawnStream(target: PreviewSession) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
   )
   target.proc = proc
+  target.startedAt = Date.now()
   let stderr = ''
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     if (session !== target || target.stopped) return
-    // 持续收到码流说明流是健康的，清零重启计数
-    target.failures = 0
     target.pending.push(chunk)
     scheduleFlush(target)
   })
@@ -151,6 +153,7 @@ const startPreviewStream: IpcStartPreviewStream = async (deviceId) => {
     proc: null,
     stopped: false,
     failures: 0,
+    startedAt: Date.now(),
     pending: [],
     flush: null,
   }

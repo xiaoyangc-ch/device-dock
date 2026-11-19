@@ -23,15 +23,57 @@ const PROTECTED_DELETE = new Set([
   '/apex',
 ])
 
-export function assertDeletable(devicePath: string) {
-  const nor = devicePath.replace(/\/+$/, '') || '/'
+/**
+ * 设备路径规范化：拒绝很可能是命令拼接错误产生的相对路径、NUL 和 `..`。
+ * 删除场景宁可拒绝可疑路径，也不把 `a/../` 当成普通子目录。
+ */
+export function normalizeDevicePath(devicePath: string) {
+  if (!devicePath || devicePath.includes('\0')) {
+    throw new Error('非法设备路径')
+  }
+  if (!devicePath.startsWith('/')) {
+    throw new Error(`设备路径必须为绝对路径：${devicePath}`)
+  }
+
+  const parts: string[] = []
+  for (const part of devicePath.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      throw new Error(`设备路径不能包含 ..：${devicePath}`)
+    }
+    parts.push(part)
+  }
+  return '/' + parts.join('/')
+}
+
+/**
+ * 删除守卫同时接受运行时挂载点。
+ * `/storage/<UUID>`、`/mnt/media_rw/<卷>` 等动态路径不能依赖固定名单。
+ */
+export function assertDeletable(
+  devicePath: string,
+  protectedMounts: Iterable<string> = []
+) {
+  const nor = normalizeDevicePath(devicePath)
   if (PROTECTED_DELETE.has(nor)) {
     throw new Error(`拒绝删除受保护路径：${devicePath}`)
+  }
+  for (const mount of protectedMounts) {
+    let mountPath = ''
+    try {
+      mountPath = normalizeDevicePath(mount)
+    } catch {
+      continue
+    }
+    if (nor === mountPath) {
+      throw new Error(`拒绝删除挂载点：${devicePath}`)
+    }
   }
   // 只删顶层的 /xxx 也拦掉：那基本都是挂载点或系统目录
   if (nor.split('/').filter(Boolean).length < 2) {
     throw new Error(`拒绝删除顶层目录：${devicePath}`)
   }
+  return nor
 }
 
 /**

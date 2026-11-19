@@ -109,28 +109,51 @@ test('剪贴板消息解析出文本，剩余字节原样返回', () => {
   const frame = new Uint8Array([...clipboardFrame('你好'), 0xff])
   const decoded = decodeIncoming(frame)
 
-  assert.deepEqual(decoded?.message, { type: 'clipboard', text: '你好' })
-  assert.deepEqual([...decoded!.rest], [0xff])
+  assert.equal(decoded.kind, 'message')
+  assert.deepEqual(decoded.kind === 'message' ? decoded.message : null, {
+    type: 'clipboard',
+    text: '你好',
+  })
+  assert.deepEqual([...decoded.rest], [0xff])
 })
 
-test('半包返回 null（等下一片数据）', () => {
+test('半包返回 incomplete（等下一片数据）', () => {
   const frame = clipboardFrame('hello')
 
-  assert.equal(decodeIncoming(frame.slice(0, 3)), null)
-  assert.equal(decodeIncoming(frame.slice(0, 6)), null)
+  assert.equal(decodeIncoming(frame.slice(0, 3)).kind, 'incomplete')
+  assert.equal(decodeIncoming(frame.slice(0, 6)).kind, 'incomplete')
 })
 
-test('ACK 是 9 字节：不足返回 null，够了就切掉', () => {
+test('ACK 是 9 字节：不足返回 incomplete，够了就切掉', () => {
   const ack = new Uint8Array(9)
   ack[0] = 1
 
-  assert.equal(decodeIncoming(ack.slice(0, 8)), null)
+  assert.equal(decodeIncoming(ack.slice(0, 8)).kind, 'incomplete')
 
   const decoded = decodeIncoming(new Uint8Array([...ack, 0x42]))
-  assert.deepEqual(decoded?.message, { type: 'ack' })
-  assert.deepEqual([...decoded!.rest], [0x42])
+  assert.equal(decoded.kind, 'message')
+  assert.deepEqual(decoded.kind === 'message' ? decoded.message : null, {
+    type: 'ack',
+  })
+  assert.deepEqual([...decoded.rest], [0x42])
 })
 
-test('未知类型整段丢弃，避免缓冲区无限堆积', () => {
-  assert.equal(decodeIncoming(new Uint8Array([99, 1, 2, 3])), null)
+test('未知类型消费一个字节，后续合法消息仍可解析', () => {
+  const ack = new Uint8Array(9)
+  ack[0] = 1
+  const decoded = decodeIncoming(new Uint8Array([99, ...ack]))
+  assert.equal(decoded.kind, 'unknown')
+  assert.deepEqual([...decoded.rest], [...ack])
+
+  const next = decodeIncoming(decoded.rest)
+  assert.equal(next.kind, 'message')
+})
+
+test('异常超长剪贴板只消费类型字节，不让读取循环永久等待', () => {
+  const frame = new Uint8Array(5)
+  frame[0] = 0
+  new DataView(frame.buffer).setUint32(1, 2 * 1024 * 1024)
+  const decoded = decodeIncoming(frame)
+  assert.equal(decoded.kind, 'unknown')
+  assert.equal(decoded.rest.length, 4)
 })

@@ -152,39 +152,50 @@ export function encodeCommand(type: number) {
 
 /**
  * 从控制信道里切出一条完整消息。
- * 数据可能任意分片，缓冲区不够时返回 null，等下一包。
+ * 半包必须等待后续数据；未知类型则消费一个字节重新同步。
  */
-export function decodeIncoming(buffer: Uint8Array): {
-  message: { type: 'clipboard'; text: string } | { type: 'ack' }
-  rest: Uint8Array
-} | null {
-  if (buffer.length < 1) return null
+export type DecodedIncoming =
+  | {
+      kind: 'message'
+      message: { type: 'clipboard'; text: string } | { type: 'ack' }
+      rest: Uint8Array
+    }
+  | { kind: 'incomplete' }
+  | { kind: 'unknown'; rest: Uint8Array }
+
+export function decodeIncoming(buffer: Uint8Array): DecodedIncoming {
+  if (buffer.length < 1) return { kind: 'incomplete' }
 
   const type = buffer[0]
 
   if (type === Incoming.Clipboard) {
-    if (buffer.length < 5) return null
+    if (buffer.length < 5) return { kind: 'incomplete' }
 
     const view = new DataView(buffer.buffer, buffer.byteOffset)
     const length = view.getUint32(1)
-    if (buffer.length < 5 + length) return null
+    if (length > 1024 * 1024) {
+      return { kind: 'unknown', rest: buffer.slice(1) }
+    }
+    if (buffer.length < 5 + length) return { kind: 'incomplete' }
 
     const text = new TextDecoder().decode(buffer.subarray(5, 5 + length))
     return {
+      kind: 'message',
       message: { type: 'clipboard', text },
       rest: buffer.slice(5 + length),
     }
   }
 
   if (type === Incoming.AckClipboard) {
-    if (buffer.length < 9) return null
+    if (buffer.length < 9) return { kind: 'incomplete' }
 
     return {
+      kind: 'message',
       message: { type: 'ack' },
       rest: buffer.slice(9),
     }
   }
 
-  // 未知类型：整段丢弃（协议不兼容时不要无限堆积）
-  return null
+  // 未知类型只消费类型字节，后续可能还有可以识别的新消息。
+  return { kind: 'unknown', rest: buffer.slice(1) }
 }

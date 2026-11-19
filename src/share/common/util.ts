@@ -1,7 +1,6 @@
 import detectOs from 'licia/detectOs'
 
 export function isDev() {
-  // @ts-ignore
   return import.meta.env.MODE === 'development'
 }
 

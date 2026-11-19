@@ -32,6 +32,14 @@ import * as file from './adb/file'
 import * as fps from './adb/fps'
 import * as port from './adb/port'
 import { getCpuLoads, getCpus, getCpuTemperature } from './adb/cpu'
+import {
+  findProp,
+  parseIpAndMac,
+  parseMemory,
+  parseScreen,
+  parseStorage,
+  parseWifiSsid,
+} from './adb/deviceParse'
 import log from 'share/common/log'
 import {
   IpcCancelPortScan,
@@ -137,7 +145,7 @@ function overviewName(properties: Record<string, string>): string {
 
 async function getOverview(deviceId: string) {
   const device = client.getDevice(deviceId)
-  // 9 条命令合并成 2 条批量 shell + 1 次 getProperties：
+  // 常规概览命令合并成 2 条批量 shell + 1 次 getProperties：
   // 每多一次 adb 往返，概览页就多几十毫秒
   const [properties, cpus, baseInfo, sysInfo] = await Promise.all([
     device.getProperties(),
@@ -149,17 +157,24 @@ async function getOverview(deviceId: string) {
     ) as Promise<string[]>,
     shell(
       deviceId,
-      ['wm size', 'wm density', 'cat /proc/meminfo', 'dumpsys diskstats', 'id'],
+      [
+        'wm size',
+        'wm density',
+        'cat /proc/meminfo',
+        'dumpsys diskstats',
+        'df -k /data',
+        'id',
+      ],
       30000
     ) as Promise<string[]>,
   ])
   const [kernelVersion, fontScale, wifi, ipOut] = baseInfo
-  const [wmSize, wmDensity, memInfo, diskStats, idOut] = sysInfo
+  const [wmSize, wmDensity, memInfo, diskStats, dfInfo, idOut] = sysInfo
 
   const net = parseIpAndMac(ipOut)
   const screen = parseScreen(wmSize, wmDensity)
   const memory = parseMemory(memInfo)
-  const storage = parseStorage(diskStats)
+  const storage = parseStorage(diskStats, dfInfo)
 
   return {
     name: overviewName(properties),
@@ -181,53 +196,6 @@ async function getOverview(deviceId: string) {
   }
 }
 
-/**
- * `ip addr` 按接口切块，优先 wlan0，其次 eth0，最后任意非 lo 且带 IPv4 的接口。
- */
-function parseIpAndMac(out: string) {
-  const interfaces = String(out)
-    .split(/\n(?=\d+: )/)
-    .map((block) => ({
-      block,
-      name: (block.match(/^\d+: ([^:@]+)/) || [])[1] || '',
-      hasIpv4: /inet (?!127\.)/.test(block),
-    }))
-
-  const pick = (name: string) =>
-    interfaces.find((item) => item.name === name && item.hasIpv4)
-  let target = pick('wlan0')
-  let netType = '无线网络'
-  if (!target) {
-    target = pick('eth0')
-    netType = '有线网络'
-  }
-  if (!target) {
-    target = interfaces.find((item) => item.name !== 'lo' && item.hasIpv4)
-    netType = '网络'
-  }
-
-  let ip = ''
-  let mac = ''
-  if (target) {
-    const ipMatch = target.block.match(/inet (\d+\.\d+\.\d+\.\d+)/)
-    const macMatch = target.block.match(
-      /link\/ether (([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2}))/
-    )
-    if (ipMatch) ip = ipMatch[1]
-    if (macMatch) mac = macMatch[1]
-  }
-
-  return { ip, mac, netType }
-}
-
-/** 从 dumpsys wifi 里取 SSID；`<unknown ssid>` 视为未连接。 */
-function parseWifiSsid(out: string): string {
-  const matched = String(out).match(/mWifiInfo\s+SSID: "?(.+?)"?,/)
-  const ssid = matched?.[1]
-  if (!ssid || ssid === '<unknown ssid>') return ''
-  return ssid
-}
-
 async function getIpAndMac(deviceId: string) {
   return parseIpAndMac(await shell(deviceId, 'ip addr'))
 }
@@ -239,17 +207,24 @@ async function getInputMethod(deviceId: string) {
 }
 
 async function setFontScale(deviceId: string, scale: number) {
+  if (!Number.isFinite(scale) || scale < 0.5 || scale > 4) {
+    throw new Error('字体缩放值必须在 0.5 到 4 之间')
+  }
   await shell(deviceId, `settings put system font_scale ${scale}`)
 }
 
 /** 厂商市场名：各品牌自定义属性不同，按优先级取第一个有值的。 */
 function getMarketName(properties: Record<string, string>): string {
   const keys = [
+    'ro.product.marketname',
+    'ro.product.vendor.marketname',
+    'ro.vendor.product.marketname',
+    'ro.config.hw_market_name',
+    'ro.config.hw.marketname',
     'ro.oppo.market.name',
     'ro.config.marketing_name',
     'ro.vendor.oplus.market.enname',
     'ro.vivo.market.name',
-    'ro.product.marketname',
     'ro.asus.product.mkt_name',
   ]
   for (const key of keys) {
@@ -366,55 +341,8 @@ const screencapRaw: IpcScreencapRaw = async (deviceId) => {
 // 显示 / 内存 / 存储解析
 // ---------------------------------------------------------------------------
 
-function parseScreen(wmSize: string, wmDensity: string) {
-  const physicalResolution = findProp('Physical size', wmSize)
-  const physicalDensity = findProp('Physical density', wmDensity)
-  const hasOverrideResolution = wmSize.includes('Override')
-  const hasOverrideDensity = wmDensity.includes('Override')
-
-  return {
-    resolution: hasOverrideResolution
-      ? findProp('Override size', wmSize)
-      : physicalResolution,
-    physicalResolution,
-    density: hasOverrideDensity
-      ? findProp('Override density', wmDensity)
-      : physicalDensity,
-    physicalDensity,
-  }
-}
-
 async function getMemory(deviceId: string) {
   return parseMemory(await shell(deviceId, 'cat /proc/meminfo'))
-}
-
-function parseMemory(memInfo: string) {
-  const total = findProp('MemTotal', memInfo)
-  const free = findProp('MemAvailable', memInfo) || findProp('MemFree', memInfo)
-  if (!total || !free) return { memTotal: 0, memUsed: 0 }
-
-  const memTotal = parseInt(total, 10) * 1024
-  const memFree = parseInt(free, 10) * 1024
-  return { memTotal, memUsed: memTotal - memFree }
-}
-
-function parseStorage(storageInfo: string) {
-  const matched = String(storageInfo).match(/Data-Free: (\d+)K \/ (\d+)K/)
-  if (!matched) return { storageTotal: 0, storageUsed: 0 }
-
-  const free = parseInt(matched[1], 10) * 1024
-  const total = parseInt(matched[2], 10) * 1024
-  return { storageTotal: total, storageUsed: total - free }
-}
-
-/** 取 `Key: value` 行的值；找不到返回空串。 */
-function findProp(key: string, text: string): string {
-  for (const raw of String(text).split('\n')) {
-    const line = raw.trim()
-    if (!line.startsWith(key)) continue
-    return line.replace(/.*:/, '').trim()
-  }
-  return ''
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +497,9 @@ const pairDevice: IpcPairDevice = async (host, port, password) => {
 // ---------------------------------------------------------------------------
 
 const inputKey: IpcInputKey = async (deviceId, keyCode) => {
+  if (!Number.isInteger(keyCode) || keyCode < 0) {
+    throw new Error('非法按键码')
+  }
   await base.shell(deviceId, `input keyevent ${keyCode}`)
 }
 

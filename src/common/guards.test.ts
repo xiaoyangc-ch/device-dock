@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assertDeletable, assertPackageName } from './guards'
+import {
+  assertDeletable,
+  assertPackageName,
+  normalizeDevicePath,
+} from './guards'
 
 test('删除守卫：拒绝设备盘根与内部存储根', () => {
   const blocked = [
@@ -48,6 +52,32 @@ test('删除守卫：正常的两级以上路径放行', () => {
 test('删除守卫：末尾斜杠归一化后同样受保护', () => {
   assert.throws(() => assertDeletable('/data/media/0///'), /拒绝删除/)
   assert.doesNotThrow(() => assertDeletable('/sdcard/Download/'))
+})
+
+test('删除守卫：运行时挂载根一律拒绝', () => {
+  const mounts = ['/storage/ABCD-1234', '/mnt/media_rw/ABCD-1234']
+  assert.throws(
+    () => assertDeletable('/storage/ABCD-1234/', mounts),
+    /挂载点/
+  )
+  assert.throws(
+    () => assertDeletable('/mnt/media_rw/ABCD-1234', mounts),
+    /挂载点/
+  )
+  assert.doesNotThrow(() =>
+    assertDeletable('/storage/ABCD-1234/DCIM/a.jpg', mounts)
+  )
+})
+
+test('删除守卫：拒绝 ..、相对路径和 NUL', () => {
+  assert.throws(() => assertDeletable('/sdcard/a/..'), /不能包含/)
+  assert.throws(() => assertDeletable('sdcard/a'), /绝对路径/)
+  assert.throws(() => assertDeletable('/sdcard/a\0b'), /非法设备路径/)
+})
+
+test('设备路径规范化：折叠重复斜杠和单点', () => {
+  assert.equal(normalizeDevicePath('/sdcard//a/./b/'), '/sdcard/a/b')
+  assert.equal(normalizeDevicePath('/'), '/')
 })
 
 test('包名：正常包名通过', () => {

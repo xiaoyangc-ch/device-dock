@@ -1,10 +1,10 @@
 import LunaModal from 'luna-modal/react'
 import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import { t } from 'common/util'
 import Style from './PackageInfoModal.module.scss'
 import defaultIcon from '../../../assets/default-icon.png'
 import fileSize from 'licia/fileSize'
-import md5 from 'licia/md5'
 import dateFormat from 'licia/dateFormat'
 import { IModalProps } from 'share/common/types'
 import { Copyable } from '../common/Copyable'
@@ -15,6 +15,14 @@ interface IProps extends IModalProps {
 }
 
 const DATE_FORMAT = 'yyyy-mm-dd HH:MM:ss'
+
+async function sha256Base64(value: string) {
+  const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
 
 function item(title: string, value: string | number) {
   return (
@@ -28,6 +36,23 @@ function item(title: string, value: string | number) {
 export default function PackageInfoModal(props: IProps) {
   const { packageInfo } = props
   const signature = packageInfo.signatures[0]
+  const [fingerprint, setFingerprint] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    setFingerprint('')
+    if (!signature) return
+    sha256Base64(signature)
+      .then((value) => {
+        if (alive) setFingerprint(value)
+      })
+      .catch(() => {
+        if (alive) setFingerprint('')
+      })
+    return () => {
+      alive = false
+    }
+  }, [signature])
 
   return createPortal(
     <LunaModal
@@ -57,22 +82,18 @@ export default function PackageInfoModal(props: IProps) {
         item(t('targetSdkVersion'), packageInfo.targetSdkVersion)}
       {item(
         t('firstInstallTime'),
-        dateFormat(new Date(packageInfo.firstInstallTime), DATE_FORMAT)
+        dateFormat(new Date(packageInfo.firstInstallTime), DATE_FORMAT),
       )}
       {item(
         t('lastUpdateTime'),
-        dateFormat(new Date(packageInfo.lastUpdateTime), DATE_FORMAT)
+        dateFormat(new Date(packageInfo.lastUpdateTime), DATE_FORMAT),
       )}
       {item(t('apkSize'), fileSize(packageInfo.apkSize))}
       {item(t('appSize'), fileSize(packageInfo.appSize))}
       {item(t('dataSize'), fileSize(packageInfo.dataSize))}
       {item(t('cacheSize'), fileSize(packageInfo.cacheSize))}
-      {signature &&
-        item(
-          t('signature') + ' MD5',
-          md5(signature)
-        )}
+      {fingerprint && item(t('signature') + ' SHA-256', fingerprint)}
     </LunaModal>,
-    document.body
+    document.body,
   )
 }

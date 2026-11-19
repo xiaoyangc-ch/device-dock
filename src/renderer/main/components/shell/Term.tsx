@@ -43,10 +43,12 @@ export default observer(function Term(props: ITermProps) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const sessionIdRef = useRef('')
+  const disposedRef = useRef(false)
 
   const { device } = store
 
   useEffect(() => {
+    disposedRef.current = false
     const term = new Terminal({
       allowProposedApi: true,
       fontSize: 14,
@@ -103,6 +105,7 @@ export default observer(function Term(props: ITermProps) {
 
     return () => {
       disposed = true
+      disposedRef.current = true
       offShellData()
       if (sessionIdRef.current) main.killShell(sessionIdRef.current)
       term.dispose()
@@ -121,7 +124,8 @@ export default observer(function Term(props: ITermProps) {
 
     fitAddonRef.current?.fit()
     // 等面板显示完成再聚焦，否则 focus 会被隐藏状态吞掉
-    setTimeout(() => termRef.current?.focus(), 500)
+    const timer = setTimeout(() => termRef.current?.focus(), 500)
+    return () => clearTimeout(timer)
   }, [props.visible])
 
   function setSessionId(id: string) {
@@ -146,8 +150,12 @@ export default observer(function Term(props: ITermProps) {
       {
         label: t('paste'),
         click: async () => {
-          const text = await navigator.clipboard.readText()
-          if (text) main.writeShell(sessionIdRef.current, text)
+          try {
+            const text = await main.readClipboard()
+            if (text) main.writeShell(sessionIdRef.current, text)
+          } catch {
+            // 系统剪贴板不可用时保持终端内容不变。
+          }
         },
       },
       {
@@ -168,6 +176,10 @@ export default observer(function Term(props: ITermProps) {
           main
             .createShell(device.id)
             .then((id) => {
+              if (disposedRef.current) {
+                main.killShell(id)
+                return
+              }
               setSessionId(id)
             })
             .catch(() => {

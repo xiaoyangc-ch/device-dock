@@ -42,6 +42,7 @@ const DANGEROUS = new Set([
 
 const page = new URLSearchParams(location.search).get('page') || ''
 const isMainWin = !page || page === 'main'
+const canUseStream = page === 'webcast'
 
 // fromEntries 会把类型擦成 index signature，导致渲染层 main.xxx 全部失型：
 // 这里断言回原类型（运行时被过滤掉的通道调用时会得到 undefined）
@@ -55,7 +56,12 @@ const api = (
 
 contextBridge.exposeInMainWorld('preload', preloadObj)
 contextBridge.exposeInMainWorld('main', api)
-contextBridge.exposeInMainWorld('node', nodeObj)
+contextBridge.exposeInMainWorld(
+  'node',
+  canUseStream
+    ? nodeObj
+    : {}
+)
 
 declare global {
   const main: typeof api

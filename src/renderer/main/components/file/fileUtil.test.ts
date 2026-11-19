@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { iconOf, isPreviewable, modeOf, typeOf } from './fileUtil'
+import {
+  conflictName,
+  iconOf,
+  isPreviewable,
+  isValidFileName,
+  modeOf,
+  typeOf,
+} from './fileUtil'
 
 function f(partial: any) {
   return {
@@ -48,4 +55,17 @@ test('modeOf：符号串原样返回，数字按八进制展开', () => {
   assert.equal(modeOf(f({ mode: 0o755, directory: true })), 'drwxr-xr-x')
   assert.equal(modeOf(f({ mode: '' })), '--')
   assert.equal(modeOf(f({ mode: 'oops' })), 'oops')
+})
+
+test('文件名：拒绝路径分隔符和点目录', () => {
+  assert.equal(isValidFileName('正常 文件名.txt'), true)
+  for (const name of ['', '.', '..', 'a/b', 'a\\b', 'a\0b']) {
+    assert.equal(isValidFileName(name), false, `应拒绝 ${JSON.stringify(name)}`)
+  }
+})
+
+test('文件名：本地冲突自动编号且保留扩展名', () => {
+  assert.equal(conflictName('a.txt', 0), 'a.txt')
+  assert.equal(conflictName('a.txt', 1), 'a (1).txt')
+  assert.equal(conflictName('.hidden', 2), '.hidden (2)')
 })

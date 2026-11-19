@@ -15,12 +15,14 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class Connection(private val client: LocalSocket) : Thread() {
     private companion object {
         private const val TAG = "DeviceDock.Connection"
-        private var packageCache = JSONObject()
+        private val packageCache = ConcurrentHashMap<String, JSONObject>()
         private const val ICON_CACHE_DIR = "/data/local/tmp/devicedock/icons"
+        private const val PROTOCOL_VERSION = 2
 
         init {
             val iconCacheDir = File(ICON_CACHE_DIR)
@@ -47,13 +49,18 @@ class Connection(private val client: LocalSocket) : Thread() {
     }
 
     private fun handleRequest(id: String, method: String, params: String) {
-        Log.i(TAG, "Request method: $method, params: $params")
+        Log.i(TAG, "Request method: $method")
 
         val result = JSONObject()
 
         when (method) {
             "getVersion" -> {
                 result.put("version", getVersion())
+                result.put("protocolVersion", PROTOCOL_VERSION)
+            }
+
+            "shutdown" -> {
+                result.put("ok", true)
             }
 
             "getPackageInfos" -> {
@@ -61,8 +68,9 @@ class Connection(private val client: LocalSocket) : Thread() {
             }
 
             "startFileServer" -> {
-                val port = HttpFileServerManager.start()
-                result.put("port", port)
+                val started = HttpFileServerManager.start()
+                result.put("port", started.port)
+                result.put("token", started.token)
             }
 
             "isFileServerRunning" -> {
@@ -70,14 +78,39 @@ class Connection(private val client: LocalSocket) : Thread() {
                 result.put("running", running)
             }
 
+            "allowFile" -> {
+                val data = JSONObject(params)
+                val allowed = HttpFileServerManager.allowFile(
+                    data.getString("path"),
+                    data.getString("token")
+                )
+                result.put("allowed", allowed)
+            }
+
             else -> {
                 Log.e(TAG, "Unknown method: $method")
             }
         }
 
-        Log.i(TAG, "Response: $result")
-        Wire.Response.newBuilder().setId(id).setResult(result.toString()).build()
+        val response = result.toString()
+        Log.d(TAG, "Response method=$method size=${response.length}")
+        Wire.Response.newBuilder().setId(id).setResult(response).build()
             .writeDelimitedTo(client.outputStream)
+        client.outputStream.flush()
+
+        if (method == "shutdown") {
+            HttpFileServerManager.stop()
+            Runtime.getRuntime().halt(0)
+        }
+    }
+
+    fun closeQuietly() {
+        interrupt()
+        try {
+            client.close()
+        } catch (_: Exception) {
+            // already closed
+        }
     }
 
     private fun getVersion(): String {
@@ -118,9 +151,16 @@ class Connection(private val client: LocalSocket) : Thread() {
         info.put("signatures", getSignatures(packageInfo))
 
         val applicationInfo = packageInfo.applicationInfo
+            ?: throw IllegalStateException("Missing ApplicationInfo for $packageName")
         var apkSize = 0L
-        val apkPath = applicationInfo.sourceDir
-        apkSize = File(apkPath).length()
+        val apkPaths = listOf(applicationInfo.publicSourceDir, applicationInfo.sourceDir)
+            .filter { !it.isNullOrBlank() }
+        val apkPath = apkPaths.firstOrNull { File(it).exists() }
+            ?: apkPaths.firstOrNull()
+            ?: ""
+        if (apkPath.isNotEmpty()) {
+            apkSize = File(apkPath).length()
+        }
         info.put("apkPath", apkPath)
         info.put("apkSize", apkSize)
         info.put("enabled", applicationInfo.enabled)
@@ -133,17 +173,26 @@ class Connection(private val client: LocalSocket) : Thread() {
 
         var label = packageName
 
-        val cacheKey = "$packageName.$apkSize"
+        val cacheKey = "$packageName.$apkSize.${packageInfo.lastUpdateTime}"
         var icon = ""
 
-        if (packageCache.has(cacheKey)) {
-            val cacheInfo = packageCache.getJSONObject(cacheKey)
+        val cacheInfo = packageCache[cacheKey]
+        if (cacheInfo != null) {
             label = cacheInfo.getString("label")
             icon = cacheInfo.getString("icon")
         } else {
-            val resources = getResources(apkPath)
+            val resources = if (apkPath.isNotEmpty()) {
+                try {
+                    getResources(apkPath)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to open resources for $packageName", e)
+                    null
+                }
+            } else {
+                null
+            }
             val labelRes = applicationInfo.labelRes
-            if (labelRes != 0) {
+            if (labelRes != 0 && resources != null) {
                 try {
                     label = resources.getString(labelRes)
                 } catch (e: Exception) {
@@ -151,7 +200,7 @@ class Connection(private val client: LocalSocket) : Thread() {
                 }
             }
 
-            if (applicationInfo.icon != 0) {
+            if (applicationInfo.icon != 0 && resources != null) {
                 try {
                     icon = "$ICON_CACHE_DIR/$cacheKey.png"
                     val file = File(icon)
@@ -168,7 +217,7 @@ class Connection(private val client: LocalSocket) : Thread() {
             val cacheInfo = JSONObject()
             cacheInfo.put("label", label)
             cacheInfo.put("icon", icon)
-            packageCache.put(cacheKey, cacheInfo)
+            packageCache[cacheKey] = cacheInfo
         }
         info.put("label", label)
         info.put("icon", icon)
@@ -209,10 +258,15 @@ class Connection(private val client: LocalSocket) : Thread() {
     }
 
     private fun getSignatures(packageInfo: PackageInfo): JSONArray {
-        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            packageInfo.signingInfo.apkContentsSigners
-        } else {
-            packageInfo.signatures
+        val signatures = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.signingInfo?.apkContentsSigners ?: emptyArray()
+            } else {
+                packageInfo.signatures ?: emptyArray()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get signatures for ${packageInfo.packageName}", e)
+            emptyArray()
         }
 
         val array = JSONArray()

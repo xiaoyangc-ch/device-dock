@@ -442,10 +442,11 @@ export function spawnAdbLines(
   timeoutMs: number,
   onLine: (line: string) => void,
   onSpawn?: (kill: () => void) => void
-): Promise<{ code: number | null; timedOut: boolean }> {
+): Promise<{ code: number | null; timedOut: boolean; stderr: string }> {
   return new Promise((resolve, reject) => {
     const cp = spawnAdbProcess(args)
     let settled = false
+    let stderr: Buffer = Buffer.alloc(0)
     // 按字节缓冲到换行再解码：逐 chunk 解码会把 UTF-8 汉字切成两半
     let pending: Buffer = Buffer.alloc(0)
 
@@ -458,7 +459,7 @@ export function spawnAdbLines(
       } catch {
         // ignore
       }
-      resolve({ code, timedOut })
+      resolve({ code, timedOut, stderr: decode([stderr]) })
     }
 
     const timer = setTimeout(() => finish(-1, true), timeoutMs)
@@ -480,7 +481,13 @@ export function spawnAdbLines(
         if (line.trim()) onLine(line)
       }
     })
-    cp.stderr?.on('data', () => {})
+    cp.stderr?.on('data', (chunk: Buffer) => {
+      if (stderr.length >= 64 * 1024) return
+      stderr = Buffer.concat([
+        stderr,
+        chunk.subarray(0, 64 * 1024 - stderr.length),
+      ])
+    })
 
     cp.on('error', (error) => {
       if (settled) return
@@ -497,7 +504,7 @@ export function spawnAdbLines(
         const line = decode([pending]).replace(/\r$/, '')
         if (line.trim()) onLine(line)
       }
-      resolve({ code, timedOut: false })
+      resolve({ code, timedOut: false, stderr: decode([stderr]) })
     })
   })
 }

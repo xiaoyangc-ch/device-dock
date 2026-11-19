@@ -1,10 +1,13 @@
-import { RefObject, useEffect } from 'react'
+import { RefObject, useEffect, useRef } from 'react'
 import ResizeSensor from 'licia/ResizeSensor'
 
 export function useWindowResize(resizeCallback: () => void) {
+  const callbackRef = useRef(resizeCallback)
+  callbackRef.current = resizeCallback
   useEffect(() => {
-    window.addEventListener('resize', resizeCallback)
-    return () => window.removeEventListener('resize', resizeCallback)
+    const listener = () => callbackRef.current()
+    window.addEventListener('resize', listener)
+    return () => window.removeEventListener('resize', listener)
   }, [])
 }
 
@@ -13,12 +16,14 @@ export function useResizeSensor(
   containerRef: RefObject<HTMLElement | null>,
   resizeCallback: () => void
 ) {
+  const callbackRef = useRef(resizeCallback)
+  callbackRef.current = resizeCallback
   useEffect(() => {
     const element = containerRef.current
     if (!element) return
 
     const sensor = new ResizeSensor(element)
-    sensor.addListener(resizeCallback)
+    sensor.addListener(() => callbackRef.current())
     return () => sensor.destroy()
   }, [])
 }
