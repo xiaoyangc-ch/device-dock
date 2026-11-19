@@ -43,6 +43,11 @@ export interface IProcess {
   pid: string
 }
 
+export type IpcExportDiagnostics = () => Promise<{
+  canceled: boolean
+  path?: string
+}>
+
 export enum TransferType {
   Upload,
   Download,
@@ -51,36 +56,36 @@ export enum TransferType {
 export type IpcGetFps = (deviceId: string, pkg: string) => Promise<number>
 export type IpcGetDevices = () => Promise<IDevice[]>
 export type IpcListForwards = (
-  deviceId: string
+  deviceId: string,
 ) => Promise<Array<{ local: string; remote: string }>>
 export type IpcListReverses = IpcListForwards
 export type IpcForward = (
   deviceId: string,
   local: string,
-  remote: string
+  remote: string,
 ) => void
 export type IpcReverse = (
   deviceId: string,
   remote: string,
-  local: string
+  local: string,
 ) => void
 
 export type IpcMeasureLatency = (deviceId: string) => Promise<{ ms: number }>
 export type IpcGetPackageInfos = (
   deviceId: string,
-  packageNames: string[]
+  packageNames: string[],
 ) => Promise<IPackageInfo[]>
 export type IpcPairDevice = (
   host: string,
   port: number,
-  password: string
+  password: string,
 ) => Promise<void>
 export type IpcCreateShell = (deviceId: string) => Promise<string>
 export type IpcWriteShell = (sessionId: string, data: string) => void
 export type IpcResizeShell = (
   sessionId: string,
   cols: number,
-  rows: number
+  rows: number,
 ) => void
 export type IpcKillShell = (sessionId: string) => void
 export type IpcScreencap = (deviceId: string) => Promise<string>
@@ -92,7 +97,7 @@ export type IpcStopPreviewStream = () => Promise<void>
 // 从 APK 里抽应用图标（按需，只对用户选中的应用拉一次）
 export type IpcGetPackageIcon = (
   deviceId: string,
-  packageName: string
+  packageName: string,
 ) => Promise<string>
 export type IpcOpenLogcat = (deviceId: string) => Promise<string>
 export type IpcCloseLogcat = (logcatId: string) => Promise<void>
@@ -101,20 +106,20 @@ export type IpcResumeLogcat = IpcCloseLogcat
 export type IpcInputKey = (deviceId: string, keyCode: number) => Promise<void>
 export type IpcReverseTcp = (
   deviceId: string,
-  remote: string
+  remote: string,
 ) => Promise<number>
 export type IpcConnectDevice = (host: string, port?: number) => Promise<void>
 export type IpcDisconnectDevice = IpcConnectDevice
 export type IpcMoveFile = (
   deviceId: string,
   src: string,
-  dest: string
+  dest: string,
 ) => Promise<void>
 export type IpcPasteFiles = (
   deviceId: string,
   sources: string[],
   dest: string,
-  cut: boolean
+  cut: boolean,
 ) => Promise<{ copied: number; failed: { name: string; error: string }[] }>
 export type IpcStatFile = (deviceId: string, path: string) => Promise<IFileStat>
 export type IpcReadDir = (deviceId: string, path: string) => Promise<IFile[]>
@@ -122,7 +127,7 @@ export type IpcReadDirPage = (
   deviceId: string,
   path: string,
   offset: number,
-  limit: number
+  limit: number,
 ) => Promise<{ files: IFile[]; total: number }>
 export type IpcSearchDir = (
   deviceId: string,
@@ -132,7 +137,7 @@ export type IpcSearchDir = (
   allDisks?: boolean,
   /** 分页：默认 0/1000；索引搜索支持翻页看全部结果 */
   offset?: number,
-  limit?: number
+  limit?: number,
 ) => Promise<{ files: IFile[]; total: number; partial?: boolean }>
 export type IpcCreateDir = (deviceId: string, path: string) => Promise<void>
 export type IpcDeleteDir = IpcCreateDir
@@ -141,31 +146,31 @@ export type IpcOpenFile = IpcCreateDir
 export type IpcPushFile = (
   deviceId: string,
   src: string,
-  dest: string
+  dest: string,
 ) => Promise<void>
 export type IpcPullFile = (
   deviceId: string,
   src: string,
   dest: string,
-  options?: { overwrite?: boolean }
+  options?: { overwrite?: boolean },
 ) => Promise<void>
 export type IpcEnablePackage = (deviceId: string, pkg: string) => Promise<void>
 export type IpcDisablePackage = IpcEnablePackage
 export type IpcGetPackages = (
   deviceId: string,
-  system?: boolean
+  system?: boolean,
 ) => Promise<string[]>
 export type IpcGetPackageApkPath = (
   deviceId: string,
-  packageName: string
+  packageName: string,
 ) => Promise<string>
 export type IpcInstallPackage = (
   deviceId: string,
-  apkPath: string
+  apkPath: string,
 ) => Promise<void>
 export type IpcUninstallPackage = (
   deviceId: string,
-  pkg: string
+  pkg: string,
 ) => Promise<void>
 export type IpcStartPackage = (deviceId: string, pkg: string) => Promise<void>
 export type IpcStopPackage = IpcStartPackage
@@ -176,10 +181,7 @@ export type IpcGetTopPackage = (deviceId: string) => Promise<{
 }>
 
 export type IpcGetProcesses = (deviceId: string) => Promise<IProcess[]>
-export type IpcGetFileUrl = (
-  deviceId: string,
-  path: string
-) => Promise<string>
+export type IpcGetFileUrl = (deviceId: string, path: string) => Promise<string>
 
 export type IpcScanLanDevices = () => Promise<{
   scanned: number
@@ -189,7 +191,7 @@ export type IpcScanLanDevices = () => Promise<{
 // 单个 IP 的端口扫描：先扫 ADB 常用段，扫不到再扫 1-65535
 export type IpcScanDevicePorts = (
   host: string,
-  deep?: boolean
+  deep?: boolean,
 ) => Promise<{
   ip: string
   adbPorts: number[]
@@ -203,58 +205,55 @@ export type IpcCancelPortScan = () => Promise<void>
 
 export type IpcReverseWebCast = (
   deviceId: string,
-  remote: string
+  remote: string,
 ) => Promise<{ ok: boolean; port: number; error?: string }>
 export type IpcStartWebCast = (
   deviceId: string,
-  args: string[]
+  args: string[],
 ) => Promise<{ ok: boolean; error?: string }>
 export type IpcStopWebCast = (deviceId: string) => Promise<void>
 export type IpcShowWebCast = (deviceId: string, name: string) => Promise<void>
 export type IpcWaitWebCast = (
   deviceId: string,
-  scid: string
+  scid: string,
 ) => Promise<{ ok: boolean }>
 export type IpcWebCastDisplays = (
-  deviceId: string
+  deviceId: string,
 ) => Promise<{ id: number; name: string }[]>
 export type IpcInstallWebCastApk = (
   deviceId: string,
-  apkPath: string
+  apkPath: string,
 ) => Promise<{ ok: boolean; message: string }>
 export type IpcWebCastOnTop = (
   deviceId: string,
-  onTop: boolean
+  onTop: boolean,
 ) => Promise<void>
 export type IpcResizeWebCast = (
   deviceId: string,
   videoWidth: number,
-  videoHeight: number
+  videoHeight: number,
 ) => Promise<void>
 
 export type IpcRecordingStart = (
-  deviceId: string
+  deviceId: string,
 ) => Promise<{ id: string; path: string }>
-export type IpcRecordingChunk = (
-  id: string,
-  data: Uint8Array
-) => Promise<void>
+export type IpcRecordingChunk = (id: string, data: Uint8Array) => Promise<void>
 export type IpcRecordingStop = (
-  id: string
+  id: string,
 ) => Promise<{ path: string; ok: boolean; error?: string }>
 
 export type IpcRebootDevice = (deviceId: string) => Promise<void>
 
 export type IpcDiskPrepare = (
-  serial: string
+  serial: string,
 ) => Promise<{ ok: boolean; out: string }>
 
 export type IpcDiskRun = (
   serial: string,
-  args: string[]
+  args: string[],
 ) => Promise<{ ok: boolean; out: string }>
 
 export type IpcDiskScanAll = (
-  serial: string
+  serial: string,
 ) => Promise<{ ok: boolean; disks?: any[]; out?: string }>
 export type IpcGetInputMethod = (deviceId: string) => Promise<string>

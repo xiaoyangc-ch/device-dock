@@ -11,6 +11,11 @@ import { promisify } from 'util'
 import { createHash } from 'crypto'
 import { pathToFileURL } from 'node:url'
 import { isTrustedAppUrl } from 'common/appUrl'
+import {
+  finishOperation,
+  sanitizeForDiagnostics,
+  startOperation,
+} from './operationLog'
 
 const execAsync = promisify(_exec)
 
@@ -84,8 +89,44 @@ export function handleEvent<Args extends unknown[], Result>(
 ) {
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedSender(event)
-    logger.debug(channel, ...args)
-    return listener(...(args as Args))
+    const operationId = startOperation(channel, args)
+    logger.debug(`[op ${operationId}] ${channel}`)
+
+    const failed = (error: unknown): never => {
+      finishOperation(operationId, error)
+      logger.error(`[op ${operationId}] ${channel} failed`, error)
+      const detail =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : JSON.stringify(sanitizeForDiagnostics(error))
+      const wrapped = new Error(
+        `${detail}（操作 ID: ${operationId}）`,
+        error instanceof Error ? { cause: error } : undefined,
+      )
+      throw wrapped
+    }
+
+    try {
+      const result = listener(...(args as Args))
+      if (
+        result &&
+        typeof (result as unknown as PromiseLike<unknown>).then === 'function'
+      ) {
+        return Promise.resolve(result).then(
+          (value) => {
+            finishOperation(operationId)
+            return value
+          },
+          (error) => failed(error),
+        )
+      }
+      finishOperation(operationId)
+      return result
+    } catch (error) {
+      return failed(error)
+    }
   })
 }
 

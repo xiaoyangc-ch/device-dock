@@ -81,11 +81,11 @@ function schedulePrewarm(deviceId: string) {
 // 设备列表
 // ---------------------------------------------------------------------------
 
-const getDevices: IpcGetDevices = async () => {
+export const getDevices: IpcGetDevices = async () => {
   if (!client) return []
 
   const devices = (await client.listDevices()).filter(
-    (device) => device.type === 'emulator' || device.type === 'device'
+    (device) => device.type === 'emulator' || device.type === 'device',
   )
   if (devices.length) schedulePrewarm(devices[0].id)
 
@@ -121,7 +121,7 @@ const getDevices: IpcGetDevices = async () => {
           sdkVersion: '',
         }
       }
-    })
+    }),
   )
 }
 
@@ -143,7 +143,7 @@ function overviewName(properties: Record<string, string>): string {
 // 概览
 // ---------------------------------------------------------------------------
 
-async function getOverview(deviceId: string) {
+export async function getOverview(deviceId: string) {
   const device = client.getDevice(deviceId)
   // 常规概览命令合并成 2 条批量 shell + 1 次 getProperties：
   // 每多一次 adb 往返，概览页就多几十毫秒
@@ -153,7 +153,7 @@ async function getOverview(deviceId: string) {
     shell(
       deviceId,
       ['uname -r', 'settings get system font_scale', 'dumpsys wifi', 'ip addr'],
-      30000
+      30000,
     ) as Promise<string[]>,
     shell(
       deviceId,
@@ -165,7 +165,7 @@ async function getOverview(deviceId: string) {
         'df -k /data',
         'id',
       ],
-      30000
+      30000,
     ) as Promise<string[]>,
   ])
   const [kernelVersion, fontScale, wifi, ipOut] = baseInfo
@@ -202,7 +202,7 @@ async function getIpAndMac(deviceId: string) {
 
 async function getInputMethod(deviceId: string) {
   return String(
-    await shell(deviceId, 'settings get secure default_input_method')
+    await shell(deviceId, 'settings get secure default_input_method'),
   ).trim()
 }
 
@@ -333,7 +333,7 @@ const screencapRaw: IpcScreencapRaw = async (deviceId) => {
   // Buffer 可能来自池化内存：切出精确区间再交给 IPC
   return buf.buffer.slice(
     buf.byteOffset,
-    buf.byteOffset + buf.byteLength
+    buf.byteOffset + buf.byteLength,
   ) as ArrayBuffer
 }
 
@@ -358,7 +358,7 @@ function normalizeHost(host: string | undefined): string {
 async function waitDeviceOnline(
   host: string,
   port: number,
-  timeoutMs = 8000
+  timeoutMs = 8000,
 ): Promise<boolean> {
   const target = `${host}:${port}`
   const deadline = Date.now() + timeoutMs
@@ -450,11 +450,11 @@ const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
     result.openPorts.length
   ) {
     const preferred = result.openPorts.filter(
-      (p) => (p >= 5550 && p <= 5600) || (p >= 7500 && p <= 7600)
+      (p) => (p >= 5550 && p <= 5600) || (p >= 7500 && p <= 7600),
     )
     const candidates = (preferred.length ? preferred : result.openPorts).slice(
       0,
-      3
+      3,
     )
     for (const port of candidates) {
       if (result.cancelled || token.cancelled) break
@@ -586,7 +586,7 @@ async function restartAdbServer() {
             'reconnect after restart failed',
             host,
             port,
-            e && e.message
+            e && e.message,
           )
         } else {
           await sleep(1000)
@@ -697,9 +697,7 @@ export async function init() {
 
   handleEvent('getDevices', getDevices)
   handleEvent('scanLanDevices', () =>
-    scanLan((progress) =>
-      window.sendTo('main', 'lanScanProgress', progress)
-    )
+    scanLan((progress) => window.sendTo('main', 'lanScanProgress', progress)),
   )
   handleEvent('scanDevicePorts', scanDevicePorts)
   handleEvent('cancelPortScan', cancelDevicePortScan)

@@ -16,6 +16,10 @@ let win: BrowserWindow | null = null
 const logs: string[] = []
 let logChars = 0
 
+export function getRecentLogs(maxChars = 1_500_000) {
+  return logs.join('').slice(-Math.max(1, maxChars))
+}
+
 export function showWin() {
   if (win && !win.isDestroyed()) {
     win.focus()

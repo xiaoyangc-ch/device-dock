@@ -28,8 +28,39 @@
   text-decoration: none;
 }
 
+.diagnosticsButton {
+  flex-shrink: 0;
+  padding: 5px 14px;
+  border: 1px solid #1677ff;
+  border-radius: 6px;
+  background: #1677ff;
+  color: #fff;
+  cursor: pointer;
+}
+
+.diagnosticsButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.diagnosticsHint,
+.diagnosticsStatus {
+  max-width: 390px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  color: #6b7280;
+}
+
+.diagnosticsStatus {
+  color: #374151;
+  word-break: break-all;
+}
+
 /* 更新日志区块：限高滚动，滚动条细一点 */
 .releaseNotes {
+  flex: 1;
+  min-height: 0;
   width: 100%;
   max-height: 100%;
   padding: 8px 14px;

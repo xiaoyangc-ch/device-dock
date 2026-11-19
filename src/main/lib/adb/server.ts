@@ -368,6 +368,12 @@ async function getDeviceClient(deviceId: string): Promise<DeviceClient> {
   return deviceClient
 }
 
+export async function getDeviceServerInfo(deviceId: string) {
+  const deviceClient = await getDeviceClient(deviceId)
+  await deviceClient.warm()
+  return deviceClient.sendMessage('getVersion', {})
+}
+
 // ---------------------------------------------------------------------------
 // 应用信息（名称/版本/图标）
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ import {
   IpcDisablePackage,
   IpcDisconnectDevice,
   IpcEnablePackage,
+  IpcExportDiagnostics,
   IpcForward,
   IpcGetDevices,
   IpcGetFileUrl,
@@ -81,6 +82,7 @@ import { invoke } from 'share/preload/util'
 
 export default Object.assign(mainObj, {
   getDevices: invoke<IpcGetDevices>('getDevices'),
+  exportDiagnostics: invoke<IpcExportDiagnostics>('exportDiagnostics'),
   getMainStore: invoke<IpcGetStore>('getMainStore'),
   setMainStore: invoke<IpcSetStore>('setMainStore'),
   getScreencastStore: invoke<IpcGetStore>('getScreencastStore'),

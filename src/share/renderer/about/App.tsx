@@ -1,7 +1,11 @@
+import { useState } from 'react'
 import Style from './App.module.scss'
 import icon from '../../../renderer/assets/icon.png'
+import { t } from 'common/util'
 
 const CHANGES = [
+  '4.1.1　关于页支持一键导出脱敏诊断信息与失败操作 ID',
+
   '4.1.0　设备服务自动升级、索引流式加载、应用缓存边界与 Electron/AGP 工具链升级',
 
   '4.0.2　修复麒麟/Huawei 应用列表缺项、应用详情读取失败与 APK 导出失败',
@@ -24,12 +28,45 @@ const CHANGES = [
 ]
 
 export default function App() {
+  const [exporting, setExporting] = useState(false)
+  const [diagnosticStatus, setDiagnosticStatus] = useState('')
+
+  async function exportDiagnostics() {
+    setExporting(true)
+    setDiagnosticStatus(t('diagnosticsExporting'))
+    try {
+      const result = await main.exportDiagnostics()
+      setDiagnosticStatus(
+        result.canceled
+          ? ''
+          : t('diagnosticsExported', { path: result.path || '' }),
+      )
+    } catch (error: any) {
+      setDiagnosticStatus(
+        t('diagnosticsFailed', { error: error?.message || error }),
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className={Style.aboutShell}>
       <img src={icon} />
       <div>
         {PRODUCT_NAME} {VERSION}
       </div>
+      <button
+        className={Style.diagnosticsButton}
+        disabled={exporting}
+        onClick={exportDiagnostics}
+      >
+        {exporting ? t('diagnosticsExporting') : t('exportDiagnostics')}
+      </button>
+      <div className={Style.diagnosticsHint}>{t('diagnosticsHint')}</div>
+      {diagnosticStatus && (
+        <div className={Style.diagnosticsStatus}>{diagnosticStatus}</div>
+      )}
       <div className={Style.releaseNotes}>
         <div className={Style.releaseNotesTitle}>更新内容</div>
         {CHANGES.map((item, index) => (
