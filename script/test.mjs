@@ -11,14 +11,16 @@ async function walk(dir, out = []) {
     const p = path.join(dir, entry.name)
     if (entry.isDirectory()) {
       await walk(p, out)
-    } else if (entry.name.endsWith('.test.ts')) {
+    } else {
       out.push(p)
     }
   }
   return out
 }
 
-const files = await walk(path.join(root, 'src'))
+const files = (await walk(path.join(root, 'src'))).filter((file) =>
+  file.endsWith('.test.ts'),
+)
 if (!files.length) {
   // 静默通过最危险：目录改名/glob 失效时 npm test 依旧绿灯
   console.error('没有找到 *.test.ts：测试无法执行，按失败处理')
@@ -45,7 +47,8 @@ await build({
 })
 
 console.log(`编译 ${files.length} 个测试文件 → .test-build`)
-const child = spawn(process.execPath, ['--test', outdir], {
+const compiled = (await walk(outdir)).filter((file) => file.endsWith('.mjs'))
+const child = spawn(process.execPath, ['--test', ...compiled], {
   stdio: 'inherit',
 })
 child.on('exit', (code) => process.exit(code ?? 1))
