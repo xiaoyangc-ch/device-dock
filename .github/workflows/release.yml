@@ -101,6 +101,27 @@ jobs:
           path: artifacts
       - name: Verify tag matches package version
         run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+      - name: Normalize asset names
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          normalize() {
+            local pattern="$1"
+            local target="$2"
+            local matches=()
+            while IFS= read -r -d '' file; do
+              matches+=("$file")
+            done < <(find artifacts -type f -name "$pattern" -print0)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected one artifact matching $pattern, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            if [ "${matches[0]}" != "artifacts/$target" ]; then
+              mv -- "${matches[0]}" "artifacts/$target"
+            fi
+          }
+          normalize "*-${version}-mac-arm64-adhoc.dmg" "device-dock-${version}-mac-arm64-adhoc.dmg"
+          normalize "*-${version}-win-x64.exe" "device-dock-${version}-win-x64.exe"
+          normalize "*-${version}-win-x64.zip" "device-dock-${version}-win-x64.zip"
       - name: Build checksums
         run: |
           find artifacts -type f ! -name SHA256SUMS.txt -print0 |
