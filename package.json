@@ -2,7 +2,7 @@
   "name": "device-dock",
   "productName": "设备坞",
   "appId": "com.devicedock.app",
-  "version": "4.1.2",
+  "version": "4.1.3",
   "description": "设备坞：安卓设备管理、ADB 与投屏",
   "main": "dist/main/index.js",
   "scripts": {
@@ -16,6 +16,7 @@
     "build": "zx script/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "pack": "zx script/pack.mjs",
+    "pack:mac:adhoc": "npm run build && zx script/pack.mjs && node script/sign-mac-adhoc.mjs",
     "pack:dir": "zx script/pack.mjs --dir",
     "pack:mas-dev": "zx script/pack.mjs --mas-dev",
     "pack:mas": "zx script/pack.mjs --mas",

@@ -1,5 +1,13 @@
 # 设备坞 更新日志
 
+## 4.1.3（2026-11-26）
+
+- ADB：设备坞与 APM 共用端口时增加跨进程启动锁和已有服务健康探测，避免 `Address already in use` 后 tracker 断开
+- 应用：设备端包信息失败后熔断 60 秒，后续直接使用 `pm + dumpsys` 回退，减少重复等待
+- 应用：未知版本、SDK 和容量显示 `--`，不再误显示 0
+- CI：Actions 升级到 v5；Windows 在版本标签上自动构建
+- 发布：新增 `pack:mac:adhoc` 和 Build Release 工作流，自动生成 ad-hoc 签名 DMG、NSIS、便携包与 GitHub Release
+
 ## 4.1.2（2026-11-26）
 
 - 麒麟 Android 6：设备端包管理反射增加接口扫描、双参数重载和无 flags 回退

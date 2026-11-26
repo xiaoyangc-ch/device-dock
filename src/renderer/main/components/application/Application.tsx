@@ -335,15 +335,16 @@ export default observer(function Application() {
               return span
             })(),
             packageName: info.packageName,
-            versionName: info.versionName,
-            minSdkVersion: info.minSdkVersion,
-            targetSdkVersion: info.targetSdkVersion,
-            storageUsage: fileSize(
-              info.appSize + info.dataSize + info.cacheSize,
-            ),
-            appSize: fileSize(info.appSize),
-            dataSize: fileSize(info.dataSize),
-            cacheSize: fileSize(info.cacheSize),
+            versionName: info.versionName || '--',
+            minSdkVersion: info.minSdkVersion ?? '--',
+            targetSdkVersion: info.targetSdkVersion ?? '--',
+            storageUsage:
+              info.appSize + info.dataSize + info.cacheSize > 0
+                ? fileSize(info.appSize + info.dataSize + info.cacheSize)
+                : '--',
+            appSize: info.appSize > 0 ? fileSize(info.appSize) : '--',
+            dataSize: info.dataSize > 0 ? fileSize(info.dataSize) : '--',
+            cacheSize: info.cacheSize > 0 ? fileSize(info.cacheSize) : '--',
             enabled: info.enabled ? t('enabled') : t('disabled'),
             firstInstallTime: formatTimestamp(info.firstInstallTime),
             lastUpdateTime: formatTimestamp(info.lastUpdateTime),

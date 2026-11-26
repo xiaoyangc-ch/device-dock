@@ -4,6 +4,8 @@ import icon from '../../../renderer/assets/icon.png'
 import { t } from 'common/util'
 
 const CHANGES = [
+  '4.1.3　ADB 启动互斥、包信息熔断、未知值显示与自动发布',
+
   '4.1.2　麒麟 Android 6：应用元数据、进程加载和首次读取重试优化',
 
   '4.1.1　关于页支持一键导出脱敏诊断信息与失败操作 ID',

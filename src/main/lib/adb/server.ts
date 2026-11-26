@@ -411,6 +411,8 @@ const hostDetailCache = new Map<
   string,
   { at: number; map: Map<string, IPackageDumpInfo> }
 >()
+const pkgInfoDexBackoff = new Map<string, number>()
+const PKG_INFO_RETRY_MS = 60 * 1000
 
 export async function prewarm(deviceId: string) {
   try {
@@ -425,6 +427,7 @@ export function clearPackageCaches(deviceId: string) {
   verCache.delete(deviceId)
   hostMetaCache.delete(deviceId)
   hostDetailCache.delete(deviceId)
+  pkgInfoDexBackoff.delete(deviceId)
   const prefix = deviceId + '|'
   for (const key of [...pkgInfoCache.keys()]) {
     if (key.startsWith(prefix)) pkgInfoCache.delete(key)
@@ -573,14 +576,22 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
       ),
     ])
     let fetched: IPackageInfo[] = []
-    try {
-      const response = await deviceClient.sendMessage('getPackageInfos', {
-        packageNames: misses,
-      })
-      fetched = response.packageInfos || []
-    } catch (e) {
-      // dex 在 Huawei/老 ART 上可能整体不可用；有 pm 兜底时仍应显示完整列表
-      logger.warn('getPackageInfos dex failed, using pm fallback', e)
+    if ((pkgInfoDexBackoff.get(deviceId) || 0) <= Date.now()) {
+      try {
+        const response = await deviceClient.sendMessage('getPackageInfos', {
+          packageNames: misses,
+        })
+        fetched = response.packageInfos || []
+        if (fetched.length) {
+          pkgInfoDexBackoff.delete(deviceId)
+        } else {
+          pkgInfoDexBackoff.set(deviceId, Date.now() + PKG_INFO_RETRY_MS)
+        }
+      } catch (e) {
+        // dex 在 Huawei/老 ART 上可能整体不可用；有 pm 兜底时仍应显示完整列表
+        pkgInfoDexBackoff.set(deviceId, Date.now() + PKG_INFO_RETRY_MS)
+        logger.warn('getPackageInfos dex failed, using pm fallback', e)
+      }
     }
 
     const fetchedByName = new Map<string, IPackageInfo>()

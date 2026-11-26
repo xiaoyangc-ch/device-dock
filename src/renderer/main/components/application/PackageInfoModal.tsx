@@ -20,6 +20,10 @@ function formatTimestamp(timestamp: number) {
   return timestamp > 0 ? dateFormat(new Date(timestamp), DATE_FORMAT) : '--'
 }
 
+function formatSize(size: number) {
+  return size > 0 ? fileSize(size) : '--'
+}
+
 async function sha256Base64(value: string) {
   const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
@@ -75,7 +79,7 @@ export default function PackageInfoModal(props: IProps) {
             {packageInfo.packageName}
           </Copyable>
           <Copyable className={Style.pkgVersion}>
-            {packageInfo.versionName}
+            {packageInfo.versionName || '--'}
           </Copyable>
         </div>
       </div>
@@ -89,10 +93,10 @@ export default function PackageInfoModal(props: IProps) {
         formatTimestamp(packageInfo.firstInstallTime),
       )}
       {item(t('lastUpdateTime'), formatTimestamp(packageInfo.lastUpdateTime))}
-      {item(t('apkSize'), fileSize(packageInfo.apkSize))}
-      {item(t('appSize'), fileSize(packageInfo.appSize))}
-      {item(t('dataSize'), fileSize(packageInfo.dataSize))}
-      {item(t('cacheSize'), fileSize(packageInfo.cacheSize))}
+      {item(t('apkSize'), formatSize(packageInfo.apkSize))}
+      {item(t('appSize'), formatSize(packageInfo.appSize))}
+      {item(t('dataSize'), formatSize(packageInfo.dataSize))}
+      {item(t('cacheSize'), formatSize(packageInfo.cacheSize))}
       {fingerprint && item(t('signature') + ' SHA-256', fingerprint)}
     </LunaModal>,
     document.body,

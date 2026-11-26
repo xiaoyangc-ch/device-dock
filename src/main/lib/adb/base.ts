@@ -12,6 +12,7 @@
  */
 import childProcess from 'node:child_process'
 import path from 'node:path'
+import os from 'node:os'
 import fs from 'fs-extra'
 import Adb, { Client } from '@devicefarmer/adbkit'
 import getPort from 'licia/getPort'
@@ -407,6 +408,62 @@ export function spawnAdb(
       })
     })
   })
+}
+
+const ADB_SERVER_LOCK = path.join(
+  os.tmpdir(),
+  `devicedock-adb-server-${process.getuid?.() ?? 'user'}.lock`,
+)
+
+/**
+ * 设备坞和 APM 共用 5037 端口。两个进程同时启动时，第二个 adb 会报
+ * `Address already in use`，随后 tracker 永久断开。这里用文件锁串行化启动，
+ * 并在返回非零时以 `adb devices` 探测已有服务，允许安全复用。
+ */
+export async function ensureAdbServer() {
+  const deadline = Date.now() + 20000
+  let lockFd: number | null = null
+
+  while (Date.now() < deadline) {
+    try {
+      lockFd = fs.openSync(ADB_SERVER_LOCK, 'wx')
+      break
+    } catch (e: any) {
+      if (e?.code !== 'EEXIST') throw e
+      try {
+        const age = Date.now() - fs.statSync(ADB_SERVER_LOCK).mtimeMs
+        if (age > 30000) fs.unlinkSync(ADB_SERVER_LOCK)
+      } catch {
+        // 另一个进程刚好释放了锁：下一轮直接重试
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  if (lockFd === null) throw new Error('等待 ADB 服务启动锁超时')
+
+  try {
+    const started = await spawnAdb(['start-server'], 15000)
+    if (!started.timedOut && started.code === 0) return
+
+    // 端口已被另一个客户端占用时 start-server 可能失败，但现有服务仍可用。
+    const probe = await spawnAdb(['devices'], 5000)
+    if (!probe.timedOut && probe.code === 0) return
+
+    throw new Error(
+      `ADB 服务启动失败：${started.stderr || probe.stderr || '未知错误'}`,
+    )
+  } finally {
+    try {
+      fs.closeSync(lockFd)
+    } catch {
+      // ignore
+    }
+    try {
+      fs.unlinkSync(ADB_SERVER_LOCK)
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**

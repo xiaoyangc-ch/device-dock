@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto'
 import sleep from 'licia/sleep'
 import { getSettingsStore } from './store'
 import * as base from './adb/base'
-import { shell, getAdbPath, spawnAdb } from './adb/base'
+import { ensureAdbServer, shell, getAdbPath, spawnAdb } from './adb/base'
 import * as webCast from './webCast'
 import * as logcat from './adb/logcat'
 import * as shellAdb from './adb/shell'
@@ -603,6 +603,10 @@ async function restartAdbServer() {
 
 export async function init() {
   logger.info('init')
+
+  await ensureAdbServer().catch((e) => {
+    logger.error('prepare adb server failed', e)
+  })
 
   app.on('will-quit', () => {
     if (!settingsStore.get('killAdbWhenExit')) return
