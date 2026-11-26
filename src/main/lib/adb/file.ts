@@ -59,10 +59,12 @@ import {
   buildDirSet,
   hitsToFiles,
   IFileIndex,
-  INDEX_HEADER,
+  indexFileHeader,
   INDEX_MAX_ENTRIES,
   IIndexHit,
+  isIndexFresh,
   isExpectedFindError,
+  parseIndexHeader,
   searchIndex,
   slicePage,
 } from './fileIndex'
@@ -1472,8 +1474,8 @@ async function searchRootByNames(
 // ---------------------------------------------------------------------------
 
 // Android 没有 Everything 那种系统级文件表：第一次整盘遍历时把路径建成索引，
-// 之后同一台设备的全盘搜索只查内存（毫秒级）；30 分钟后或文件操作后重建。
-const INDEX_TTL = 30 * 60 * 1000
+// 之后同一台设备的全盘搜索只查内存（毫秒级）；完整索引 30 分钟、
+// 部分索引 10 分钟内复用，文件操作后立即失效。
 
 interface IBuiltFileIndex {
   index: IFileIndex
@@ -1547,10 +1549,13 @@ async function loadFileIndex(deviceId: string): Promise<IFileIndex | null> {
     const entries: string[] = []
     let header = ''
     let invalid = false
+    let complete = true
     for await (const line of lines) {
       if (!header) {
         header = line
-        invalid = header !== INDEX_HEADER
+        const parsed = parseIndexHeader(header)
+        invalid = !parsed.valid
+        complete = parsed.complete
         if (invalid) break
         continue
       }
@@ -1567,6 +1572,7 @@ async function loadFileIndex(deviceId: string): Promise<IFileIndex | null> {
       entries,
       dirs: buildDirSet(entries),
       at: stat.mtimeMs,
+      complete,
     }
     fileIndexes.set(deviceId, index)
     return index
@@ -1629,7 +1635,11 @@ async function searchFileIndex(
   return hits
 }
 
-async function writeFileIndex(file: string, entries: string[]) {
+async function writeFileIndex(
+  file: string,
+  entries: string[],
+  complete: boolean,
+) {
   await fs.ensureDir(path.dirname(file))
   const temp = `${file}.${randomUUID()}.tmp`
   const stream = fs.createWriteStream(temp)
@@ -1638,7 +1648,7 @@ async function writeFileIndex(file: string, entries: string[]) {
       stream.once('error', reject)
     })
     const writing = (async () => {
-      stream.write(INDEX_HEADER + '\n')
+      stream.write(indexFileHeader(complete) + '\n')
       for (const entry of entries) {
         if (!stream.write(entry + '\n')) {
           await once(stream, 'drain')
@@ -1898,16 +1908,16 @@ async function buildFileIndex(
     flush()
   }
 
-  // 多个根并行扫（最多 3 路），比串行 for 快几倍
+  // 手机端 find -L 是 CPU/IO 大头。串行扫描会比三路并发慢一些，
+  // 但不会把麒麟等低性能设备的所有核心同时打满。
   const queue = roots.slice()
-  const workerCount = Math.min(3, Math.max(1, queue.length))
-  const workers = Array.from({ length: workerCount }, async () => {
+  const workers = Array.from({ length: 1 }, async () => {
     while (queue.length && !aborted() && !truncated) {
       const root = queue.shift()!
       const q = shellQuotePath(root.scan)
       onProgress(root.display, found)
 
-      const cmd = `cd ${q} && find -L . -print`
+      const cmd = `cd ${q} && if nice -n 19 true 2>/dev/null; then nice -n 19 find -L . -print; else find -L . -print; fi`
       let stopScan: (() => void) | null = null
       try {
         const result = await spawnAdbLines(
@@ -1954,20 +1964,22 @@ async function buildFileIndex(
   // 中途被新的搜索打断：连本次查询也不返回半截结果。
   if (aborted() || !entries.length) return null
 
-  const index = { entries, dirs: buildDirSet(entries), at: Date.now() }
   const completeIndex = complete && !truncated
-
-  // 超时、权限错误或达到容量上限时，只允许本次查询使用这批数据。
-  if (!completeIndex) return { index, complete: false }
+  const index: IFileIndex = {
+    entries,
+    dirs: buildDirSet(entries),
+    at: Date.now(),
+    complete: completeIndex,
+  }
+  // 即使是部分索引也先放进内存，避免用户下一次输入关键字又重扫整盘。
+  fileIndexes.set(deviceId, index)
 
   try {
-    await writeFileIndex(fileIndexPath(deviceId), entries)
-    fileIndexes.set(deviceId, index)
-    return { index, complete: true }
+    await writeFileIndex(fileIndexPath(deviceId), entries, completeIndex)
   } catch {
-    // 写盘失败仍可服务本次搜索，只是不能跨查询复用。
-    return { index, complete: false }
+    // 写盘失败仍可在当前进程内复用。
   }
+  return { index, complete: completeIndex }
 }
 
 // ---------------------------------------------------------------------------
@@ -2006,13 +2018,17 @@ async function searchAllDisksWithIndex(
   }
 
   const cached = await loadFileIndex(deviceId)
-  if (cached && Date.now() - cached.at < INDEX_TTL) {
+  if (cached && isIndexFresh(cached)) {
     // 命中索引：只查内存，不再碰设备（补元数据一次批量 stat）
     const hits = await searchFileIndex(deviceId, cached, keyword)
     emitProgress('索引', hits.length)
     const files = hitsToFiles(hits.slice(offset, offset + limit))
     await statSearchHits(deviceId, files)
-    return { files, total: hits.length }
+    return {
+      files,
+      total: hits.length,
+      partial: cached.complete ? undefined : true,
+    }
   }
 
   const built = await withIndexLock(() =>

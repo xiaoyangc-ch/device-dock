@@ -2,7 +2,7 @@
   "name": "device-dock",
   "productName": "设备坞",
   "appId": "com.devicedock.app",
-  "version": "4.1.4",
+  "version": "4.1.5",
   "description": "设备坞：安卓设备管理、ADB 与投屏",
   "main": "dist/main/index.js",
   "scripts": {

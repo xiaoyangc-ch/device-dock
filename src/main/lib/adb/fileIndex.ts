@@ -3,7 +3,11 @@ import mime from 'licia/mime'
 import { IFile } from 'common/types'
 
 export const INDEX_MAX_ENTRIES = 300000
-export const INDEX_HEADER = '#devicedock-index-v2'
+export const INDEX_HEADER = '#devicedock-index-v3'
+export const INDEX_PARTIAL_HEADER = '#devicedock-index-v3-partial'
+export const INDEX_COMPLETE_TTL_MS = 30 * 60 * 1000
+export const INDEX_PARTIAL_TTL_MS = 10 * 60 * 1000
+const LEGACY_INDEX_HEADER = '#devicedock-index-v2'
 
 const EXPECTED_FIND_ERROR =
   /permission denied|operation not permitted|no such file|not a directory|too many levels of symbolic links|input\/output error|read-only file system/i
@@ -23,12 +27,35 @@ export interface IFileIndex {
   /** 父路径出现过就说明是目录 */
   dirs: Set<string>
   at: number
+  /** 超时、权限错误或达到容量上限时为 false */
+  complete: boolean
 }
 
 export interface IIndexHit {
   path: string
   directory: boolean
   score: number
+}
+
+export function indexFileHeader(complete: boolean) {
+  return complete ? INDEX_HEADER : INDEX_PARTIAL_HEADER
+}
+
+export function parseIndexHeader(header: string) {
+  if (header === INDEX_HEADER || header === LEGACY_INDEX_HEADER) {
+    return { valid: true, complete: true }
+  }
+  if (header === INDEX_PARTIAL_HEADER) {
+    return { valid: true, complete: false }
+  }
+  return { valid: false, complete: false }
+}
+
+export function isIndexFresh(index: IFileIndex, now = Date.now()) {
+  const ttl = index.complete
+    ? INDEX_COMPLETE_TTL_MS
+    : INDEX_PARTIAL_TTL_MS
+  return now - index.at < ttl
 }
 
 export function buildDirSet(entries: string[]) {

@@ -4,6 +4,8 @@ import icon from '../../../renderer/assets/icon.png'
 import { t } from 'common/util'
 
 const CHANGES = [
+  '4.1.5　全盘搜索索引复用与低优先级单路扫描，避免每次检索重扫整盘',
+
   '4.1.4　安全、文件原子写入、ADB 初始化、应用按需图标与双产品发布门禁',
 
   '4.1.3　ADB 启动互斥、包信息熔断、未知值显示与自动发布',
