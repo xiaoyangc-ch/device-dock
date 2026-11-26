@@ -85,15 +85,28 @@ export const getDevices: IpcGetDevices = async () => {
   if (!client) return []
 
   const devices = (await client.listDevices()).filter(
+    (device) => device.type !== 'unknown',
+  )
+  const firstOnline = devices.find(
     (device) => device.type === 'emulator' || device.type === 'device',
   )
-  if (devices.length) schedulePrewarm(devices[0].id)
+  if (firstOnline) schedulePrewarm(firstOnline.id)
 
   return Promise.all(
     devices.map(async (device) => {
       const cached = deviceInfoCache.get(device.id)
       if (cached && Date.now() - cached.at < DEVICE_INFO_TTL) {
         return { ...cached.info, type: device.type }
+      }
+      if (device.type !== 'device' && device.type !== 'emulator') {
+        return {
+          id: device.id,
+          type: device.type,
+          serialno: '',
+          name: device.id,
+          androidVersion: '',
+          sdkVersion: '',
+        }
       }
 
       try {
@@ -359,32 +372,38 @@ async function waitDeviceOnline(
   host: string,
   port: number,
   timeoutMs = 8000,
-): Promise<boolean> {
+): Promise<'device' | 'unauthorized' | null> {
   const target = `${host}:${port}`
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
       const devices = await client.listDevices()
       const found = devices.find((d) => d.id === target)
-      if (found && found.type === 'device') return true
-      // unauthorized 需要用户在手机上点允许：也算连接流程走完，不再空等
-      if (found && found.type === 'unauthorized') return true
+      if (found && found.type === 'device') return 'device'
+      if (found && found.type === 'unauthorized') return 'unauthorized'
     } catch {
       // adb server 忙/重启：继续轮询
     }
     await sleep(250)
   }
-  return false
+  return null
 }
 
 const connectDevice: IpcConnectDevice = async (host, port) => {
   const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
   const p = port || 5555
+  if (!Number.isInteger(p) || p < 1 || p > 65535) {
+    throw new Error('设备端口必须在 1-65535 之间')
+  }
   // adb connect 返回只代表命令被接受：设备可能还停在 offline，
   // 立刻刷新列表会看不到它，用户以为“扫到端口却没连上”
   await client.connect(h, p)
-  if (!(await waitDeviceOnline(h, p))) {
+  const state = await waitDeviceOnline(h, p)
+  if (state === 'unauthorized') {
+    throw new Error('设备已连接，但尚未授权：请在手机上允许 USB/无线调试')
+  }
+  if (state !== 'device') {
     throw new Error('设备未上线：请确认已开启 ADB 调试并在手机上允许授权')
   }
 }
@@ -392,7 +411,11 @@ const connectDevice: IpcConnectDevice = async (host, port) => {
 const disconnectDevice: IpcDisconnectDevice = async (host, port) => {
   const h = normalizeHost(host)
   if (!h) throw new Error('设备地址为空')
-  await client.disconnect(h, port || 5555)
+  const p = port || 5555
+  if (!Number.isInteger(p) || p < 1 || p > 65535) {
+    throw new Error('设备端口必须在 1-65535 之间')
+  }
+  await client.disconnect(h, p)
 }
 
 /** 当前设备端口扫描的取消令牌（扫描 + adb connect 复核都要能取消）。 */
@@ -465,7 +488,8 @@ const scanDevicePorts: IpcScanDevicePorts = async (host, deep) => {
           sleep(2500),
         ])
         // 再用 online 轮询确认：connect 命令返回时设备往往还是 offline
-        if (await waitDeviceOnline(h, port, 2500)) {
+        const state = await waitDeviceOnline(h, port, 2500)
+        if (state === 'device' || state === 'unauthorized') {
           logger.info('adb connect fallback ok', h, port)
           result.adbPorts = [port]
           break
@@ -486,9 +510,22 @@ const cancelDevicePortScan: IpcCancelPortScan = async () => {
 }
 
 const pairDevice: IpcPairDevice = async (host, port, password) => {
-  const { stdout } = await spawnAdb(['pair', `${host}:${port}`, password])
-  if (!String(stdout).includes('Successfully')) {
-    throw new Error(`Pair device failed: ${stdout}`)
+  const target = normalizeHost(host)
+  if (!target) throw new Error('设备地址为空')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('配对端口必须在 1-65535 之间')
+  }
+  if (!/^\d{6,12}$/.test(String(password))) {
+    throw new Error('配对码格式不正确')
+  }
+  const { code, stdout, stderr } = await spawnAdb([
+    'pair',
+    `${target}:${port}`,
+    password,
+  ])
+  const output = `${stdout}\n${stderr}`
+  if (code !== 0 || !output.includes('Successfully')) {
+    throw new Error(`Pair device failed: ${output.trim()}`)
   }
 }
 

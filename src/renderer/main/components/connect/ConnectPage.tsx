@@ -16,7 +16,7 @@ import { t } from 'common/util'
 import CodePairModal from './CodePairModal'
 import Style from './ConnectPage.module.scss'
 import store from '../../store'
-import { isRemoteDevice } from '../../lib/util'
+import { isOnlineDevice, isRemoteDevice } from '../../lib/util'
 import PageToolbar, {
   Page,
   ToolButton,
@@ -52,7 +52,7 @@ function subscribeProgress() {
             : t('connectPortCommon')
 
       progressSink(`${label} ${percent}%`)
-    }
+    },
   )
 
   main.on(
@@ -60,9 +60,9 @@ function subscribeProgress() {
     (payload: { phase: 'probe' | 'connect'; done: number; total: number }) => {
       if (!lanSink) return
       lanSink(
-        `${payload.phase === 'connect' ? t('connect') : t('connectLan')} ${payload.done}/${payload.total}`
+        `${payload.phase === 'connect' ? t('connect') : t('connectLan')} ${payload.done}/${payload.total}`,
       )
-    }
+    },
   )
 }
 
@@ -179,7 +179,7 @@ export default observer(function ConnectPage() {
             target: `${host}:${found}`,
             note,
           }),
-          { icon: 'success' }
+          { icon: 'success' },
         )
       } else if (result.openPorts.length) {
         notify(
@@ -187,7 +187,7 @@ export default observer(function ConnectPage() {
             count: result.scanned,
             ports: result.openPorts.join(' / '),
           }),
-          { icon: 'info' }
+          { icon: 'info' },
         )
       } else {
         notify(t('connectNoAdb', { count: result.scanned }), { icon: 'info' })
@@ -213,7 +213,7 @@ export default observer(function ConnectPage() {
       } else {
         notify(
           t('connectFound', { count: result.found.length, online: connected }),
-          { icon: 'success' }
+          { icon: 'success' },
         )
       }
       main.sendToWindow('main', 'refreshDevices')
@@ -233,13 +233,19 @@ export default observer(function ConnectPage() {
       ? `Android ${device.androidVersion} (API ${device.sdkVersion})`
       : '--',
     status:
-      device.type === 'offline' ? t('connectOffline') : t('connectOnline'),
+      device.type === 'offline'
+        ? t('connectOffline')
+        : device.type === 'unauthorized'
+          ? t('connectUnauthorized')
+          : device.type === 'unknown'
+            ? t('unknown')
+            : t('connectOnline'),
   }))
 
   const selected =
     store.devices.find((item) => item.id === selectedId) || store.device
   const remote = selected ? isRemoteDevice(selected.id) : false
-  const offline = selected ? selected.type === 'offline' : true
+  const offline = selected ? !isOnlineDevice(selected) : true
   const connectDisabled = (isStrBlank(ip) && !portScanning) || connecting
 
   return (
@@ -345,6 +351,10 @@ export default observer(function ConnectPage() {
           onDoubleClick={(_e, node) => {
             const picked: any = Array.isArray(node) ? node[0] : node
             if (!picked?.data?.id) return
+            if (!isOnlineDevice(picked.data)) {
+              notify(t('connectAuthorizeHint'), { icon: 'info' })
+              return
+            }
             // 双击才切当前设备：单击只是选中，工具栏按选中行操作
             setSelectedId(picked.data.id)
             store.selectDevice(picked.data.id)
@@ -357,8 +367,12 @@ export default observer(function ConnectPage() {
         />
         {isEmpty(devices) && (
           <div className={Style.connectEmpty}>
-            <div className={Style.connectEmptyTitle}>{t('connectEmptyTitle')}</div>
-            <div className={Style.connectEmptyHint}>{t('connectEmptyHint')}</div>
+            <div className={Style.connectEmptyTitle}>
+              {t('connectEmptyTitle')}
+            </div>
+            <div className={Style.connectEmptyHint}>
+              {t('connectEmptyHint')}
+            </div>
           </div>
         )}
       </div>

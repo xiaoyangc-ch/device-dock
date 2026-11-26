@@ -18,11 +18,7 @@ import FontAdjustModal from './FontAdjustModal'
 import PortMappingModal from './PortMappingModal'
 import RemoteControllerModal from './RemoteControllerModal'
 import toBool from 'licia/toBool'
-import PageToolbar, {
-  Page,
-  ToolButton,
-  ToolSpace,
-} from '../layout/PageToolbar'
+import PageToolbar, { Page, ToolButton, ToolSpace } from '../layout/PageToolbar'
 
 export default observer(function Overview() {
   const [isLoading, setIsLoading] = useState(false)
@@ -78,15 +74,21 @@ export default observer(function Overview() {
   }
 
   async function restartAdbServer() {
-    await main.restartAdbServer()
-    notify(t('adbServerRestarted'), { icon: 'success' })
+    try {
+      await main.restartAdbServer()
+      notify(t('adbServerRestarted'), { icon: 'success' })
+    } catch (e: any) {
+      notify(t('commonErr') + (e?.message ? `：${e.message}` : ''), {
+        icon: 'error',
+      })
+    }
   }
 
   function metric(
     label: string,
     value: string,
     foot: string,
-    percent?: number
+    percent?: number,
   ) {
     return (
       <div className={Style.metric}>
@@ -111,7 +113,7 @@ export default observer(function Overview() {
   function infoRow(
     label: string,
     value: string | number | boolean | undefined,
-    onDoubleClick?: () => void
+    onDoubleClick?: () => void,
   ) {
     let handled = false
     const text =
@@ -168,13 +170,13 @@ export default observer(function Overview() {
             t('storage'),
             `${fileSize(storageUsed)} / ${fileSize(storageTotal)}`,
             t('used', { percent: storagePct }),
-            storagePct
+            storagePct,
           )}
           {metric(
             t('memory'),
             `${fileSize(memUsed)} / ${fileSize(memTotal)}`,
             t('used', { percent: memPct }),
-            memPct
+            memPct,
           )}
           {metric(
             t('resolution'),
@@ -182,7 +184,7 @@ export default observer(function Overview() {
             t('physical', {
               size: overview.physicalResolution || '--',
               dpi: overview.physicalDensity || '--',
-            })
+            }),
           )}
         </div>
 
@@ -202,18 +204,18 @@ export default observer(function Overview() {
             <div className={Style.rows}>
               {infoRow(
                 t('androidVersion'),
-                `Android ${device.androidVersion} (API ${device.sdkVersion})`
+                `Android ${device.androidVersion} (API ${device.sdkVersion})`,
               )}
               {infoRow(t('kernelVersion'), overview.kernelVersion)}
               {infoRow(
                 t('processor'),
                 `${overview.processor || t('unknown')} · ${t('cpuNum', {
                   count: overview.cpuNum,
-                })} · ${overview.abi}`
+                })} · ${overview.abi}`,
               )}
               {infoRow(
                 'Root',
-                toBool(overview.root) ? t('rooted') : t('notRooted')
+                toBool(overview.root) ? t('rooted') : t('notRooted'),
               )}
             </div>
           </section>
@@ -229,7 +231,7 @@ export default observer(function Overview() {
                 overview.fontScale ? `${overview.fontScale}x` : '1x',
                 overview.fontScale
                   ? () => store.openModal('fontAdjust')
-                  : undefined
+                  : undefined,
               )}
             </div>
           </section>

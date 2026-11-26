@@ -132,7 +132,7 @@
   "uploadFileErr": "Не удалось загрузить файл",
   "fileDownloading": "Скачивание файла {{path}}",
   "download": "Скачать",
-  "fileDownloaded": "Файл загружен в {{path}}",
+  "fileDownloaded": "Скачано файлов: {{count}} в {{dir}}",
   "deleteFileConfirm": "Вы уверены, что хотите удалить {{name}}?",
   "newFolder": "Новая папка",
   "newFolderName": "Новое имя папки",

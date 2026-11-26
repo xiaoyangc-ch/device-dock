@@ -1,1 +1,5 @@
 wire.d.ts
+src/main/lib/wire.js
+src/common/theme.ts
+src/renderer/theme.scss
+src/renderer/icon.css

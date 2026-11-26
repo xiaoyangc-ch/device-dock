@@ -205,6 +205,18 @@ export default observer(function Application() {
     return info.system ? t('sysPackageTip') + ' ' + text : text
   }
 
+  async function runPackageAction(action: () => Promise<unknown>) {
+    try {
+      await action()
+      return true
+    } catch (e: any) {
+      notify(t('commonErr') + (e?.message ? `：${e.message}` : ''), {
+        icon: 'error',
+      })
+      return false
+    }
+  }
+
   async function open(packageName: string) {
     try {
       await main.startPackage(store.device!.id, packageName)
@@ -264,7 +276,11 @@ export default observer(function Application() {
           const ok = await LunaModal.confirm(
             confirmText('stopPackageConfirm', info),
           )
-          if (ok) await main.stopPackage(current.id, info.packageName)
+          if (ok) {
+            await runPackageAction(() =>
+              main.stopPackage(current.id, info.packageName),
+            )
+          }
         },
       },
       { type: 'separator' },
@@ -276,15 +292,25 @@ export default observer(function Application() {
           )
           if (!ok) return
 
-          await main.disablePackage(current.id, info.packageName)
-          refresh(info.packageName)
+          if (
+            await runPackageAction(() =>
+              main.disablePackage(current.id, info.packageName),
+            )
+          ) {
+            refresh(info.packageName)
+          }
         },
       },
       {
         label: t('enablePackage'),
         click: async () => {
-          await main.enablePackage(current.id, info.packageName)
-          refresh(info.packageName)
+          if (
+            await runPackageAction(() =>
+              main.enablePackage(current.id, info.packageName),
+            )
+          ) {
+            refresh(info.packageName)
+          }
         },
       },
       { type: 'separator' },
@@ -296,10 +322,15 @@ export default observer(function Application() {
           )
           if (!ok) return
 
-          await main.clearPackage(current.id, info.packageName)
-          notify(t('dataCleared'), { icon: 'success' })
-          // pm clear 是异步生效的：等 1 秒再刷新，否则读到旧占用
-          setTimeout(() => refresh(info.packageName), 1000)
+          if (
+            await runPackageAction(() =>
+              main.clearPackage(current.id, info.packageName),
+            )
+          ) {
+            notify(t('dataCleared'), { icon: 'success' })
+            // pm clear 是异步生效的：等 1 秒再刷新，否则读到旧占用
+            setTimeout(() => refresh(info.packageName), 1000)
+          }
         },
       },
       {
@@ -310,8 +341,13 @@ export default observer(function Application() {
           )
           if (!ok) return
 
-          await main.uninstallPackage(current.id, info.packageName)
-          refresh()
+          if (
+            await runPackageAction(() =>
+              main.uninstallPackage(current.id, info.packageName),
+            )
+          ) {
+            refresh()
+          }
         },
       },
     ]

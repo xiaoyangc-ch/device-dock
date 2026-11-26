@@ -10,12 +10,17 @@ import Style from './RemoteControllerModal.module.scss'
 import className from 'licia/className'
 import store from '../../store'
 import { AndroidKeyCode } from '@yume-chan/scrcpy'
+import { notify } from 'share/renderer/lib/util'
 
 export default observer(function RemoteControllerModal(props: IModalProps) {
   function press(keyCode: AndroidKeyCode) {
     return () => {
       if (!store.device) return
-      main.inputKey(store.device.id, keyCode)
+      main.inputKey(store.device.id, keyCode).catch((e: any) => {
+        notify(t('commonErr') + (e?.message ? `：${e.message}` : ''), {
+          icon: 'error',
+        })
+      })
     }
   }
 
@@ -101,6 +106,6 @@ export default observer(function RemoteControllerModal(props: IModalProps) {
         </div>
       </div>
     </LunaModal>,
-    document.body
+    document.body,
   )
 })

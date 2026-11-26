@@ -14,7 +14,6 @@ import PageStyle from './FilePage.module.scss'
 import store from '../../store'
 import { t } from 'common/util'
 import { notify, isFileDrop } from 'share/renderer/lib/util'
-import { installPackages } from '../../../lib/util'
 import { IFile } from 'luna-file-list'
 import className from 'licia/className'
 import isEmpty from 'licia/isEmpty'
@@ -111,6 +110,7 @@ export default observer(function File() {
   // 已通过 searchDir 分页取回的条数：streaming 结果会额外插入列表，
   // 不能拿 fileList.length 当偏移，否则会跳过索引里的条目
   const searchLoadedRef = useRef(0)
+  const searchRequestRef = useRef('')
   // 搜索回调只注册一次，要读最新关键字
   const filterRef = useRef(filter)
   filterRef.current = filter
@@ -363,6 +363,7 @@ export default observer(function File() {
         searchAll,
         offset,
         PAGE_SIZE,
+        searchRequestRef.current,
       )
       if (seq !== searchSeq.current) return
 
@@ -409,11 +410,13 @@ export default observer(function File() {
 
     const offProgress = main.on('searchProgress', (progress: any) => {
       if (progress?.deviceId && progress.deviceId !== device.id) return
+      if (progress?.requestId !== searchRequestRef.current) return
       setSearchProgress(progress)
     })
 
     const offResults = main.on('searchResults', (payload: any) => {
       if (payload?.deviceId && payload.deviceId !== device.id) return
+      if (payload?.requestId !== searchRequestRef.current) return
 
       const files: IFile[] = payload?.files || []
       if (!files.length) return
@@ -444,6 +447,7 @@ export default observer(function File() {
 
     const keyword = filter.trim()
     if (!keyword) {
+      searchRequestRef.current = ''
       setSearching(false)
       setSearchProgress(null)
       return
@@ -453,6 +457,8 @@ export default observer(function File() {
 
     searchTimer.current = setTimeout(async () => {
       const seq = ++searchSeq.current
+      const requestId = crypto.randomUUID()
+      searchRequestRef.current = requestId
       searchLoadedRef.current = 0
       setSearching(true)
       // 上一轮「加载更多」可能还在飞：seq 变了它的 finally 不会复位，
@@ -461,7 +467,15 @@ export default observer(function File() {
       setSearchProgress(null)
 
       try {
-        const result = await main.searchDir(device.id, path, keyword, searchAll)
+        const result = await main.searchDir(
+          device.id,
+          path,
+          keyword,
+          searchAll,
+          0,
+          PAGE_SIZE,
+          requestId,
+        )
         if (seq !== searchSeq.current) return
 
         setTotal(result.total)
@@ -493,6 +507,7 @@ export default observer(function File() {
       if (searchTimer.current) clearTimeout(searchTimer.current)
       // 导航/改关键词后让上一轮设备端搜索作废
       searchSeq.current++
+      searchRequestRef.current = ''
     }
   }, [filter, path, searchAll])
 
@@ -659,6 +674,7 @@ export default observer(function File() {
     if (!device) return
 
     setSelected(item)
+    setSelectedUrl('')
     // 目录在设备端没有可读的文件 URL：只选中，别发一次注定失败的 IPC
     // （图标视图自己判过，列表视图走这里，统一在这里拦）
     if (item.directory) {
@@ -753,7 +769,14 @@ export default observer(function File() {
 
   async function installFile(item: IFile) {
     if (!device) return
-    await installPackages(device.id, [absPath(item)])
+    try {
+      await main.installRemotePackage(device.id, absPath(item))
+      notify(t('installPackageOk'), { icon: 'success' })
+    } catch (e: any) {
+      notify(t('installPackageErr') + (e?.message ? `：${e.message}` : ''), {
+        icon: 'error',
+      })
+    }
   }
 
   function copySelection(cut: boolean, files = selectedFiles) {
@@ -832,23 +855,30 @@ export default observer(function File() {
     if (!confirmed) return
 
     let ok = 0
-    for (const item of files) {
-      try {
-        if (item.directory) {
-          await main.deleteDir(device.id, absPath(item))
-        } else {
-          await main.deleteFile(device.id, absPath(item))
-        }
-        ok++
-      } catch {
-        // 没权限的项跳过，最后统一报数量
-      }
+    let firstError = ''
+    try {
+      const result = await main.deleteEntries(
+        device.id,
+        files.map((item) => ({
+          path: absPath(item),
+          directory: !!item.directory,
+        })),
+      )
+      ok = result.deleted
+      firstError = result.failed[0]?.error || ''
+    } catch (e: any) {
+      notify(t('commonErr') + (e?.message ? `：${e.message}` : ''), {
+        icon: 'error',
+      })
+      return
     }
 
     if (ok < files.length) {
-      notify(t('fileDeletedPartial', { ok, total: files.length }), {
-        icon: 'error',
-      })
+      notify(
+        t('fileDeletedPartial', { ok, total: files.length }) +
+          (firstError ? `：${firstError}` : ''),
+        { icon: 'error' },
+      )
     }
 
     clearSelection()

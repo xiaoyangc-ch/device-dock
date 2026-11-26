@@ -5,7 +5,29 @@ const MAX_TEXT = 4000
 const MAX_DEPTH = 5
 const MAX_ARRAY = 30
 const SENSITIVE_KEY =
-  /^(?:authorization|cookie|data|password|passwd|secret|token)$/i
+  /^(?:authorization|cookie|data|password|passwd|pwd|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key)$/i
+const SENSITIVE_QUERY_KEY =
+  '(?:authorization|cookie|password|passwd|pwd|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key)'
+const SENSITIVE_QUERY_VALUE = new RegExp(
+  `([?&;]${SENSITIVE_QUERY_KEY}=)[^&#\\s]+`,
+  'gi',
+)
+const SENSITIVE_LABEL_VALUE = new RegExp(
+  `\\b(${SENSITIVE_QUERY_KEY})\\s*[:=]\\s*[^\\s,&]+`,
+  'gi',
+)
+// 视频窗口会把内层 URL 作为 file:// 查询参数传一层，因此 ?token= 会变成
+// %3Ftoken%3D。诊断里不能只看明文查询串。
+const SENSITIVE_ENCODED_QUERY_VALUE = new RegExp(
+  `((?:%3F|%26|%3B)${SENSITIVE_QUERY_KEY}%3D)(?:(?!%26|%23)[^&#\\s])+`,
+  'gi',
+)
+
+// 部分 IPC 的凭据是位置参数，没有字段名可供通用脱敏器识别。
+const SENSITIVE_ARG_INDEX: Record<string, number[]> = {
+  apmLogin: [1],
+  pairDevice: [2],
+}
 
 export const OPERATION_SESSION_ID = randomUUID()
 
@@ -29,14 +51,9 @@ const active = new Map<
 export function redactText(value: unknown, maxLength = MAX_TEXT) {
   let text = typeof value === 'string' ? value : String(value ?? '')
   text = text
-    .replace(
-      /([?&;](?:authorization|cookie|password|passwd|secret|token)=)[^&\s]+/gi,
-      '$1[REDACTED]',
-    )
-    .replace(
-      /\b(authorization|password|passwd|secret|token)\s*[:=]\s*[^\s,]+/gi,
-      '$1=[REDACTED]',
-    )
+    .replace(SENSITIVE_QUERY_VALUE, '$1[REDACTED]')
+    .replace(SENSITIVE_ENCODED_QUERY_VALUE, '$1[REDACTED]')
+    .replace(SENSITIVE_LABEL_VALUE, '$1=[REDACTED]')
   return text.length > maxLength
     ? text.slice(0, maxLength) + '…[truncated]'
     : text
@@ -93,12 +110,17 @@ export function sanitizeForDiagnostics(
 }
 
 export function startOperation(channel: string, args: unknown[]) {
+  const safeArgs = sanitizeForDiagnostics(args) as unknown[]
+  for (const index of SENSITIVE_ARG_INDEX[channel] || []) {
+    if (index >= 0 && index < safeArgs.length) safeArgs[index] = '[REDACTED]'
+  }
+
   const record: IOperationRecord = {
     id: randomUUID(),
     channel,
     status: 'pending',
     startedAt: new Date().toISOString(),
-    args: sanitizeForDiagnostics(args),
+    args: safeArgs,
   }
   records.push(record)
   active.set(record.id, { record, startedMs: Date.now() })
@@ -129,6 +151,16 @@ export function finishOperation(id: string, error?: unknown) {
 export function getOperationSnapshot() {
   return records.map((record) => ({
     ...record,
-    args: sanitizeForDiagnostics(record.args),
+    args: sanitizeOperationArgs(record.channel, record.args),
   }))
+}
+
+function sanitizeOperationArgs(channel: string, args: unknown) {
+  const safeArgs = sanitizeForDiagnostics(
+    Array.isArray(args) ? args : [],
+  ) as unknown[]
+  for (const index of SENSITIVE_ARG_INDEX[channel] || []) {
+    if (index >= 0 && index < safeArgs.length) safeArgs[index] = '[REDACTED]'
+  }
+  return safeArgs
 }

@@ -6,6 +6,7 @@ import type { IFile } from 'luna-file-list'
 import splitPath from 'licia/splitPath'
 import startWith from 'licia/startWith'
 import isStr from 'licia/isStr'
+import { safeLocalFileName } from 'common/localName'
 
 const VIDEO_EXT = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv'])
 const IMAGE_EXT = new Set([
@@ -42,7 +43,8 @@ export function iconOf(file: IFile) {
   const mime = file.mime || ''
 
   if (ext === '.apk') return 'icon-package'
-  if (startWith(mime, 'video') || VIDEO_EXT.has(ext)) return 'icon-video-recorder'
+  if (startWith(mime, 'video') || VIDEO_EXT.has(ext))
+    return 'icon-video-recorder'
   if (startWith(mime, 'image') || IMAGE_EXT.has(ext)) return 'icon-image'
   if (startWith(mime, 'text') || TEXT_EXT.has(ext)) return 'icon-file-text'
   return 'icon-open-file'
@@ -92,9 +94,10 @@ export function isValidFileName(name: string) {
 
 /** `a.txt` → `a (1).txt`；无扩展名则追加在末尾。 */
 export function conflictName(name: string, index: number) {
-  if (index <= 0) return name
-  const dot = name.lastIndexOf('.')
+  const safe = safeLocalFileName(name)
+  if (index <= 0) return safe
+  const dot = safe.lastIndexOf('.')
   return dot > 0
-    ? `${name.slice(0, dot)} (${index})${name.slice(dot)}`
-    : `${name} (${index})`
+    ? `${safe.slice(0, dot)} (${index})${safe.slice(dot)}`
+    : `${safe} (${index})`
 }

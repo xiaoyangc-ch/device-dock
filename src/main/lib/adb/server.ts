@@ -12,7 +12,13 @@ import { Client } from '@devicefarmer/adbkit'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
 import wire from '../wire'
 import waitUntil from 'licia/waitUntil'
-import { forwardTcp, getDeviceStore, setDeviceStore, shell } from './base'
+import {
+  forwardTcp,
+  getDeviceStore,
+  setDeviceStore,
+  shell,
+  spawnAdb,
+} from './base'
 import log from 'share/common/log'
 import { IPackageInfo, IpcGetFileUrl, IpcGetPackageInfos } from 'common/types'
 import { encodeDevicePath } from './filePath'
@@ -70,6 +76,23 @@ const REQUEST_TIMEOUTS: Partial<Record<DeviceMethod, number>> = {
   startFileServer: 15000,
 }
 const MAX_FRAME_BYTES = 8 * 1024 * 1024
+const DEVICE_READY_TIMEOUT = 20000
+
+function withDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}超时`)), timeoutMs)
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
 
 // ---------------------------------------------------------------------------
 // 设备服务连接
@@ -96,7 +119,11 @@ class DeviceClient {
   }
 
   async warm() {
-    await this.ensureReady()
+    await withDeadline(
+      this.ensureReady(),
+      DEVICE_READY_TIMEOUT,
+      '设备服务初始化',
+    )
   }
 
   /** 建连去重：prewarm 和业务请求同时到达时只建一条 socket。 */
@@ -114,7 +141,11 @@ class DeviceClient {
     method: M,
     params: DeviceParams<M>,
   ): Promise<DeviceResult<M>> {
-    await this.ensureReady()
+    await withDeadline(
+      this.ensureReady(),
+      DEVICE_READY_TIMEOUT,
+      '设备服务初始化',
+    )
     return this.request(method, params)
   }
 
@@ -428,10 +459,17 @@ export function clearPackageCaches(deviceId: string) {
   hostMetaCache.delete(deviceId)
   hostDetailCache.delete(deviceId)
   pkgInfoDexBackoff.delete(deviceId)
+  diskStatsCache.delete(deviceId)
+  fileServerPorts.delete(deviceId)
   const prefix = deviceId + '|'
   for (const key of [...pkgInfoCache.keys()]) {
     if (key.startsWith(prefix)) pkgInfoCache.delete(key)
   }
+}
+
+export function clearPackageInfo(deviceId: string, packageName: string) {
+  pkgInfoCache.delete(`${deviceId}|${packageName}`)
+  diskStatsCache.delete(deviceId)
 }
 
 /**
@@ -659,16 +697,18 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   if (!list.length) return list
 
   // 图标是设备端文件服务的 URL：先拿一次端口，整批复用
-  let serverInfo: FileServerInfo | undefined
-  try {
-    serverInfo = await getFileServerInfo(deviceId)
-  } catch (e) {
-    logger.warn('file server unavailable', e)
-  }
-  if (serverInfo) {
-    for (const info of list) {
-      if (info.icon) {
-        info.icon = fileServerUrl(serverInfo, info.icon)
+  if (list.some((info) => info.icon)) {
+    let serverInfo: FileServerInfo | undefined
+    try {
+      serverInfo = await getFileServerInfo(deviceId)
+    } catch (e) {
+      logger.warn('file server unavailable', e)
+    }
+    if (serverInfo) {
+      for (const info of list) {
+        if (info.icon) {
+          info.icon = fileServerUrl(serverInfo, info.icon)
+        }
       }
     }
   }
@@ -748,6 +788,7 @@ async function getPackageDiskStats(deviceId: string) {
 /** 成功才缓存端口：失败不能缓存 rejection，否则这台设备永远起不来文件服务。 */
 interface FileServerInfo {
   port: number
+  remotePort: number
   token: string
 }
 
@@ -778,11 +819,28 @@ async function getFileServerInfo(deviceId: string): Promise<FileServerInfo> {
         'isFileServerRunning',
         {},
       )
-      if (running) return cached
+      const forwards = await spawnAdb(
+        ['-s', deviceId, 'forward', '--list'],
+        5000,
+      )
+      const forwardExists = forwards.stdout
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .some(
+          (parts) =>
+            parts[0] === deviceId &&
+            parts[1] === `tcp:${cached.port}` &&
+            parts[2] === `tcp:${cached.remotePort}`,
+        )
+      if (running && forwardExists) return cached
     } catch {
       // 服务已经挂了：下面重新起
     }
     fileServerPorts.delete(deviceId)
+    await spawnAdb(
+      ['-s', deviceId, 'forward', '--remove', `tcp:${cached.port}`],
+      5000,
+    ).catch(() => undefined)
   }
 
   const deviceClient = await getDeviceClient(deviceId)
@@ -793,7 +851,7 @@ async function getFileServerInfo(deviceId: string): Promise<FileServerInfo> {
     throw new Error('设备文件服务启动结果无效')
   }
   const port = await forwardTcp(deviceId, `tcp:${result.port}`)
-  const info = { port, token }
+  const info = { port, remotePort, token }
   fileServerPorts.set(deviceId, info)
   return info
 }

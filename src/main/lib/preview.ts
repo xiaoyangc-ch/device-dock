@@ -44,7 +44,7 @@ function flushChunk(target: PreviewSession) {
     'main',
     'previewChunk',
     target.deviceId,
-    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
   )
 }
 
@@ -90,11 +90,17 @@ function spawnStream(target: PreviewSession) {
       `--time-limit=${TIME_LIMIT}`,
       '-',
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
+    { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
   )
   target.proc = proc
   target.startedAt = Date.now()
   let stderr = ''
+  let ended = false
+  const handleOnce = () => {
+    if (ended) return
+    ended = true
+    handleExit(target)
+  }
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     if (session !== target || target.stopped) return
@@ -106,14 +112,14 @@ function spawnStream(target: PreviewSession) {
   })
   proc.on('error', (e) => {
     logger.warn('preview spawn error', target.deviceId, e.message)
-    handleExit(target)
+    handleOnce()
   })
   proc.on('exit', (code) => {
     if (session !== target || target.stopped) return
     if (stderr) {
       logger.warn('preview exit', target.deviceId, code, stderr.slice(0, 300))
     }
-    handleExit(target)
+    handleOnce()
   })
   logger.info('preview stream start', target.deviceId)
 }

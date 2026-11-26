@@ -52,8 +52,13 @@ jobs:
       - name: Build Android server
         run: ./server/gradlew -p server :server:assembleRelease
 
+      - name: Verify committed device dex
+        run: |
+          cp server/devicedock.dex resources/devicedock.dex
+          git diff --exit-code -- resources/devicedock.dex
+
   win:
-    needs: quality
+    needs: [quality, android]
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
 

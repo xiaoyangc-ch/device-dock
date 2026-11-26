@@ -32,6 +32,7 @@ export default observer(function PortMappingModal(props: IModalProps) {
   const [local, setLocal] = useState('')
   const [remote, setRemote] = useState('')
   const [rows, setRows] = useState<{ local: string; remote: string }[]>([])
+  const refreshSeq = useRef(0)
 
   // 弹窗常驻挂载（children 渲染进 portal）：只在挂载时拉一次会一直显示旧数据
   useEffect(() => {
@@ -39,17 +40,20 @@ export default observer(function PortMappingModal(props: IModalProps) {
   }, [props.visible])
 
   async function refresh() {
+    const seq = ++refreshSeq.current
     try {
+      let nextRows: { local: string; remote: string }[] = []
       if (!store.device) {
-        setRows([])
+        nextRows = []
       } else if (forwarding.current) {
-        setRows(await main.listForwards(store.device.id))
+        nextRows = await main.listForwards(store.device.id)
       } else {
-        setRows(await main.listReverses(store.device.id))
+        nextRows = await main.listReverses(store.device.id)
       }
+      if (seq === refreshSeq.current) setRows(nextRows)
     } catch {
       // 设备离线：清空比留着上一次的端口列表更不容易误操作
-      setRows([])
+      if (seq === refreshSeq.current) setRows([])
     }
   }
 
@@ -129,6 +133,6 @@ export default observer(function PortMappingModal(props: IModalProps) {
         />
       </div>
     </LunaModal>,
-    document.body
+    document.body,
   )
 })

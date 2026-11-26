@@ -4,7 +4,7 @@
  * 约定：
  * - 文本命令走 shell()：多条命令用分隔符拼成一次 shell 往返，减少 adb 连接开销；
  * - 需要退出码的破坏性操作走 shellChecked()，否则 rm/pm 失败会被当成成功；
- * - 流式输出走 spawnAdbLines()，二进制流走 spawnAdbBuffer()；
+ * - 行流走 spawnAdbLines()，大文件流走 spawnAdbToFile()；
  * - 超时一律返回 timedOut 标记，调用方必须检查，不能把半截输出当完整结果。
  *
  * 这层只依赖 adbkit 的 Client（负责连接/forward 管理）和系统 adb 二进制，
@@ -14,6 +14,7 @@ import childProcess from 'node:child_process'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'fs-extra'
+import { randomUUID } from 'node:crypto'
 import Adb, { Client } from '@devicefarmer/adbkit'
 import getPort from 'licia/getPort'
 import log from 'share/common/log'
@@ -233,7 +234,10 @@ export async function forwardTcp(deviceId: string, remote: string) {
   const existing = forwards.find(
     (item) => item.remote === remote && item.serial === deviceId,
   )
-  if (existing) return Number(existing.local.replace('tcp:', ''))
+  if (existing) {
+    const matched = existing.local.match(/^tcp:(\d+)$/)
+    if (matched) return Number(matched[1])
+  }
 
   const port = await getPort()
   await device.forward(`tcp:${port}`, remote)
@@ -245,7 +249,10 @@ export const reverseTcp: IpcReverseTcp = async function (deviceId, remote) {
   const device = await client.getDevice(deviceId)
   const reverses = await device.listReverses()
   const existing = reverses.find((item) => item.remote === remote)
-  if (existing) return Number(existing.local.replace('tcp:', ''))
+  if (existing) {
+    const matched = existing.local.match(/^tcp:(\d+)$/)
+    if (matched) return Number(matched[1])
+  }
 
   const port = await getPort()
   await device.reverse(remote, `tcp:${port}`)
@@ -414,6 +421,58 @@ const ADB_SERVER_LOCK = path.join(
   os.tmpdir(),
   `devicedock-adb-server-${process.getuid?.() ?? 'user'}.lock`,
 )
+const ADB_LOCK_WAIT_MS = 30000
+
+type AdbLockInfo = {
+  pid?: number
+  nonce?: string
+  startedAt?: number
+}
+
+function readAdbLock(): AdbLockInfo | null {
+  try {
+    return JSON.parse(fs.readFileSync(ADB_SERVER_LOCK, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function isProcessAlive(pid: number) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: any) {
+    return error?.code === 'EPERM'
+  }
+}
+
+function clearStaleAdbLock() {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(ADB_SERVER_LOCK)
+  } catch {
+    return
+  }
+
+  const info = readAdbLock()
+  const age = Date.now() - stat.mtimeMs
+  const definitelyStale =
+    (info?.pid && !isProcessAlive(info.pid)) ||
+    (!info?.pid && age > 5000) ||
+    age > 10 * 60 * 1000
+  if (!definitelyStale) return
+
+  try {
+    // 删除前再读一次，避免刚释放的锁被另一个进程重新建立后误删。
+    const current = readAdbLock()
+    if ((current?.nonce || '') === (info?.nonce || '')) {
+      fs.unlinkSync(ADB_SERVER_LOCK)
+    }
+  } catch {
+    // 另一个进程已经处理
+  }
+}
 
 /**
  * 设备坞和 APM 共用 5037 端口。两个进程同时启动时，第二个 adb 会报
@@ -421,21 +480,29 @@ const ADB_SERVER_LOCK = path.join(
  * 并在返回非零时以 `adb devices` 探测已有服务，允许安全复用。
  */
 export async function ensureAdbServer() {
-  const deadline = Date.now() + 20000
+  const deadline = Date.now() + ADB_LOCK_WAIT_MS
   let lockFd: number | null = null
+  const lockInfo: AdbLockInfo = {
+    pid: process.pid,
+    nonce: randomUUID(),
+    startedAt: Date.now(),
+  }
 
   while (Date.now() < deadline) {
     try {
       lockFd = fs.openSync(ADB_SERVER_LOCK, 'wx')
+      try {
+        fs.writeFileSync(lockFd, JSON.stringify(lockInfo))
+      } catch (error) {
+        fs.closeSync(lockFd)
+        lockFd = null
+        fs.unlinkSync(ADB_SERVER_LOCK)
+        throw error
+      }
       break
     } catch (e: any) {
       if (e?.code !== 'EEXIST') throw e
-      try {
-        const age = Date.now() - fs.statSync(ADB_SERVER_LOCK).mtimeMs
-        if (age > 30000) fs.unlinkSync(ADB_SERVER_LOCK)
-      } catch {
-        // 另一个进程刚好释放了锁：下一轮直接重试
-      }
+      clearStaleAdbLock()
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
@@ -459,7 +526,9 @@ export async function ensureAdbServer() {
       // ignore
     }
     try {
-      fs.unlinkSync(ADB_SERVER_LOCK)
+      if (readAdbLock()?.nonce === lockInfo.nonce) {
+        fs.unlinkSync(ADB_SERVER_LOCK)
+      }
     } catch {
       // ignore
     }
@@ -542,39 +611,78 @@ export function spawnAdbLines(
   })
 }
 
-/** 二进制安全：exec-out 拉文件时绝不能走文本解码，否则内容会被破坏。 */
-export function spawnAdbBuffer(
+/** exec-out 大文件直接流到磁盘，避免把整个文件先堆进主进程内存。 */
+export function spawnAdbToFile(
   args: string[],
-  timeoutMs = 60000,
-): Promise<{ buffer: Buffer; code: number | null; timedOut: boolean }> {
+  file: string,
+  timeoutMs = 120000,
+): Promise<{
+  code: number | null
+  timedOut: boolean
+  stderr: string
+}> {
   return new Promise((resolve, reject) => {
     const cp = spawnAdbProcess(args)
-    const chunks: Buffer[] = []
+    const writable = fs.createWriteStream(file, { flags: 'w' })
+    const stderrChunks: Buffer[] = []
+    let stderrBytes = 0
+    let code: number | null = null
+    let closed = false
+    let finished = false
     let settled = false
+
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) {
+        writable.destroy()
+        terminate(cp)
+        reject(error)
+        return
+      }
+      resolve({
+        code,
+        timedOut: false,
+        stderr: decode(stderrChunks),
+      })
+    }
+
+    const maybeFinish = () => {
+      if (closed && finished) finish()
+    }
 
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
+      writable.destroy()
       terminate(cp)
-      resolve({ buffer: Buffer.concat(chunks), code: -1, timedOut: true })
+      resolve({
+        code: -1,
+        timedOut: true,
+        stderr: decode(stderrChunks),
+      })
     }, timeoutMs)
 
-    cp.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
-    // stderr 不参与结果：run-as 的报错会体现在退出码上
-    cp.stderr?.on('data', () => {})
-
-    cp.on('error', (error) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      reject(error)
+    cp.stdout?.pipe(writable)
+    cp.stderr?.on('data', (chunk: Buffer) => {
+      if (stderrBytes >= 64 * 1024) return
+      const part = chunk.subarray(0, 64 * 1024 - stderrBytes)
+      stderrChunks.push(part)
+      stderrBytes += part.length
     })
 
-    cp.on('close', (code) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve({ buffer: Buffer.concat(chunks), code, timedOut: false })
+    writable.on('finish', () => {
+      finished = true
+      maybeFinish()
+    })
+    writable.on('error', (error) => finish(error))
+
+    cp.on('error', (error) => finish(error))
+    cp.on('close', (exitCode) => {
+      code = exitCode
+      closed = true
+      maybeFinish()
     })
   })
 }

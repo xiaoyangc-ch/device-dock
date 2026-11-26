@@ -62,9 +62,15 @@ export function parsePackageDump(output: string) {
     }
     if (!current) continue
 
-    const versionCode = line.match(/^versionCode=\d+\s+targetSdk=(\d+)/)
-    if (versionCode) {
-      current.targetSdkVersion = Number(versionCode[1])
+    if (/^versionCode=\d+/.test(line)) {
+      for (const matched of line.matchAll(
+        /(minSdk(?:Version)?|targetSdk(?:Version)?)=(\d+)/g,
+      )) {
+        const sdk = Number(matched[2])
+        if (!Number.isFinite(sdk)) continue
+        if (matched[1].startsWith('minSdk')) current.minSdkVersion = sdk
+        else current.targetSdkVersion = sdk
+      }
       continue
     }
 

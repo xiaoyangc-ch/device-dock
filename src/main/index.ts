@@ -29,7 +29,6 @@ app.on('ready', () => {
   logger.info('app ready')
 
   terminal.init()
-  adb.init()
   diagnostics.init()
   disktool.init()
   webCast.init()
@@ -39,6 +38,10 @@ app.on('ready', () => {
   latency.init()
   reboot.init()
   stream.init()
-  main.showWin()
   menu.init()
+
+  void adb
+    .init()
+    .catch((error) => logger.error('initialize adb failed', error))
+    .finally(() => main.showWin())
 })

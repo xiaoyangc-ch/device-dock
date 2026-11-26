@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite'
 import store from '../../store'
 import { t } from 'common/util'
 import Style from './PageHead.module.scss'
+import { isOnlineDevice } from '../../lib/util'
 
 const TITLES: Record<string, string> = {
   connect: 'connectDevice',
@@ -17,13 +18,11 @@ const TITLES: Record<string, string> = {
 
 /** 页面标题 + 当前设备状态条。文件页有自己的工具栏，不显示这里。 */
 export default observer(function PageHead() {
-  const online = !!store.device && store.device.type !== 'offline'
+  const online = isOnlineDevice(store.device)
 
   return (
     <header className={Style.head}>
-      <div className={Style.title}>
-        {t(TITLES[store.panel] || store.panel)}
-      </div>
+      <div className={Style.title}>{t(TITLES[store.panel] || store.panel)}</div>
       <div className={Style.status}>
         <span className={online ? Style.dot : Style.dot + ' ' + Style.off} />
         {store.device ? (

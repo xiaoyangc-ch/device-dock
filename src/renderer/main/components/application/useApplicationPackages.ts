@@ -7,7 +7,8 @@ import { retryOnce } from 'common/retry'
 import store from '../../store'
 import { placeholderInfo } from './applicationModel'
 
-const CHUNK_SIZE = 100
+// 麒麟/远程链路单包反射较慢，50 个一批能在 30 秒服务端上限内更早拿到有效数据。
+const CHUNK_SIZE = 50
 const PAINT_INTERVAL = 250
 
 export function useApplicationPackages(

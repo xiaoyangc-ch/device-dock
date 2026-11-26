@@ -179,13 +179,17 @@ async function collectDevice(device: {
   }
 }
 
-function redactHomePaths(text: string) {
-  let output = text
-  const paths = [
+function localPathReplacements(): Array<[string, string]> {
+  const paths: Array<[string, string]> = [
     [app.getPath('userData'), '[USER_DATA]'],
     [app.getPath('temp'), '[TEMP]'],
     [app.getPath('home'), '[HOME]'],
-  ].sort((a, b) => String(b[0]).length - String(a[0]).length)
+  ]
+  return paths.sort((a, b) => String(b[0]).length - String(a[0]).length)
+}
+
+function redactPathText(text: string, paths: Array<[string, string]>) {
+  let output = text
   for (const [localPath, placeholder] of paths) {
     if (!localPath) continue
     output = output.split(String(localPath)).join(placeholder)
@@ -193,11 +197,33 @@ function redactHomePaths(text: string) {
   return output
 }
 
+/**
+ * Windows 路径在 JSON.stringify 后会变成 C:\\Users\\...，如果只在最终字符串里替换
+ * C:\Users\... 就永远匹配不到。先遍历对象值，再做一次字符串兜底。
+ */
+function redactHomePaths<T>(value: T): T {
+  const paths = localPathReplacements()
+
+  function walk(current: unknown): unknown {
+    if (typeof current === 'string') return redactPathText(current, paths)
+    if (Array.isArray(current)) return current.map(walk)
+    if (current && typeof current === 'object') {
+      return Object.fromEntries(
+        Object.entries(current).map(([key, child]) => [key, walk(child)]),
+      )
+    }
+    return current
+  }
+
+  return walk(value) as T
+}
+
 async function collectDiagnostics() {
   const started = Date.now()
   const settingsStore = getSettingsStore()
   const operations = getOperationSnapshot().filter(
-    (item) => !(item.channel === 'exportDiagnostics' && item.status === 'pending'),
+    (item) =>
+      !(item.channel === 'exportDiagnostics' && item.status === 'pending'),
   )
   const rawDevices = await adbCommand(['devices', '-l'], 8000)
   const adbVersion = await adbCommand(['version'], 5000)
@@ -282,8 +308,8 @@ const exportDiagnostics: IpcExportDiagnostics = async () => {
     : await dialog.showSaveDialog(options)
   if (result.canceled || !result.filePath) return { canceled: true }
 
-  const diagnostics = await collectDiagnostics()
-  const content = redactHomePaths(JSON.stringify(diagnostics, null, 2))
+  const diagnostics = redactHomePaths(await collectDiagnostics())
+  const content = JSON.stringify(diagnostics, null, 2)
   const temp = `${result.filePath}.${process.pid}.tmp`
   try {
     await fs.writeFile(temp, content, 'utf8')

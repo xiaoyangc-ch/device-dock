@@ -22,6 +22,17 @@ const PROTECTED_DELETE = new Set([
   '/odm',
   '/apex',
 ])
+// 这些分区整体都是系统只读区域；只保护挂载点本身仍允许误删 /system/app 等。
+const PROTECTED_TREES = [
+  '/system',
+  '/system_ext',
+  '/vendor',
+  '/vendor_dlkm',
+  '/product',
+  '/odm',
+  '/odm_dlkm',
+  '/apex',
+]
 
 /**
  * 设备路径规范化：拒绝很可能是命令拼接错误产生的相对路径、NUL 和 `..`。
@@ -52,11 +63,16 @@ export function normalizeDevicePath(devicePath: string) {
  */
 export function assertDeletable(
   devicePath: string,
-  protectedMounts: Iterable<string> = []
+  protectedMounts: Iterable<string> = [],
 ) {
   const nor = normalizeDevicePath(devicePath)
   if (PROTECTED_DELETE.has(nor)) {
     throw new Error(`拒绝删除受保护路径：${devicePath}`)
+  }
+  for (const root of PROTECTED_TREES) {
+    if (nor === root || nor.startsWith(root + '/')) {
+      throw new Error(`拒绝删除系统分区内容：${devicePath}`)
+    }
   }
   for (const mount of protectedMounts) {
     let mountPath = ''

@@ -119,11 +119,12 @@ class Connection(private val client: LocalSocket) : Thread() {
 
     private fun getPackageInfos(params: JSONObject): JSONArray {
         val packageNames = Util.jsonArrayToStringArray(params.getJSONArray("packageNames"))
+        val includeIcons = params.optBoolean("includeIcons", false)
         val result = JSONArray()
 
         packageNames.forEach {
             try {
-                result.put(getPackageInfo(it))
+                result.put(getPackageInfo(it, includeIcons))
             } catch (e: Exception) {
                 Log.e(TAG, "Fail to get package info", e)
             }
@@ -133,7 +134,7 @@ class Connection(private val client: LocalSocket) : Thread() {
     }
 
     @TargetApi(Build.VERSION_CODES.P)
-    private fun getPackageInfo(packageName: String): JSONObject {
+    private fun getPackageInfo(packageName: String, includeIcons: Boolean): JSONObject {
         var flags = PackageManager.GET_ACTIVITIES
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             flags = flags or PackageManager.GET_SIGNING_CERTIFICATES
@@ -173,7 +174,8 @@ class Connection(private val client: LocalSocket) : Thread() {
 
         var label = packageName
 
-        val cacheKey = "$packageName.$apkSize.${packageInfo.lastUpdateTime}"
+        val cacheKey =
+            "$packageName.$apkSize.${packageInfo.lastUpdateTime}.icons=${if (includeIcons) 1 else 0}"
         var icon = ""
 
         val cacheInfo = packageCache[cacheKey]
@@ -203,7 +205,7 @@ class Connection(private val client: LocalSocket) : Thread() {
                 }
             }
 
-            if (applicationInfo.icon != 0 && resources != null) {
+            if (includeIcons && applicationInfo.icon != 0 && resources != null) {
                 try {
                     icon = "$ICON_CACHE_DIR/$cacheKey.png"
                     val file = File(icon)
@@ -228,19 +230,6 @@ class Connection(private val client: LocalSocket) : Thread() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             info.put("minSdkVersion", applicationInfo.minSdkVersion)
             info.put("targetSdkVersion", applicationInfo.targetSdkVersion)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            try {
-                val stats = ServiceManager.storageStatsManager.queryStatsForPackage(
-                    packageName
-                )
-                info.put("appSize", stats.appBytes)
-                info.put("dataSize", stats.dataBytes)
-                info.put("cacheSize", stats.cacheBytes)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get storage stats for $packageName", e)
-            }
         }
 
         return info

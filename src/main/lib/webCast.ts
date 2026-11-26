@@ -13,10 +13,7 @@ import { app } from 'electron'
 import log from 'share/common/log'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
 import { getAdbPath, spawnAdb } from './adb/base'
-import {
-  clearIconCache,
-  clearPackageListCache,
-} from './adb/package'
+import { clearIconCache, clearPackageListCache } from './adb/package'
 import { clearPackageCaches } from './adb/server'
 import {
   IpcInstallWebCastApk,
@@ -48,7 +45,7 @@ function withLock<T>(deviceId: string, fn: () => Promise<T>): Promise<T> {
   const run = previous.then(fn, fn)
   const tail = run.then(
     () => undefined,
-    () => undefined
+    () => undefined,
   )
   locks.set(deviceId, tail)
   tail.then(() => {
@@ -70,7 +67,7 @@ function buildServerCmd(jarRemote: string, args: string[]) {
     return arg
   })
   return `CLASSPATH=${jarRemote} app_process /system/bin com.genymobile.scrcpy.Server ${SERVER_VERSION} ${safe.join(
-    ' '
+    ' ',
   )}`
 }
 
@@ -90,14 +87,14 @@ async function killSession(deviceId: string) {
     forwardPorts.delete(deviceId)
     await spawnAdb(
       ['-s', deviceId, 'forward', '--remove', `tcp:${port}`],
-      8000
+      8000,
     ).catch(() => undefined)
   }
 
   // 只 kill 本地 adb 客户端不会结束设备端 app_process：
   // 残留 server 占着 abstract socket，重连可能连到旧会话（参数看起来没生效）
   await spawnAdb(['-s', deviceId, 'shell', KILL_CMD], 8000).catch(
-    () => undefined
+    () => undefined,
   )
 }
 
@@ -110,7 +107,7 @@ export const startWebCast: IpcStartWebCast = (deviceId, args) =>
 
     // 每次用不同文件名：旧 server 退出时会删除自己的 jar
     const jarRemote = `${JAR_DIR}/scrcpy-${Date.now()}-${Math.floor(
-      Math.random() * 1000
+      Math.random() * 1000,
     )}.jar`
 
     const old = procs.get(deviceId)
@@ -131,10 +128,7 @@ export const startWebCast: IpcStartWebCast = (deviceId, args) =>
     }
 
     await spawnAdb(['-s', deviceId, 'shell', `mkdir -p ${JAR_DIR}`], 15000)
-    const push = await spawnAdb(
-      ['-s', deviceId, 'push', jar, jarRemote],
-      60000
-    )
+    const push = await spawnAdb(['-s', deviceId, 'push', jar, jarRemote], 60000)
     if (push.code !== 0) {
       logger.error('push failed', push.stderr)
       return { ok: false, error: push.stderr || '推送 scrcpy.jar 失败' }
@@ -144,7 +138,7 @@ export const startWebCast: IpcStartWebCast = (deviceId, args) =>
     const cp = childProcess.spawn(
       getAdbPath(),
       ['-s', deviceId, 'shell', cmd],
-      { env: { ...process.env }, windowsHide: true }
+      { env: { ...process.env }, windowsHide: true },
     )
     cp.stdout?.on('data', (d: Buffer) => {
       const text = String(d).trim()
@@ -194,7 +188,7 @@ export const reverseWebCast: IpcReverseWebCast = (deviceId, remote) =>
     if (oldPort) {
       await spawnAdb(
         ['-s', deviceId, 'forward', '--remove', `tcp:${oldPort}`],
-        10000
+        10000,
       ).catch(() => undefined)
       forwardPorts.delete(deviceId)
     }
@@ -203,7 +197,7 @@ export const reverseWebCast: IpcReverseWebCast = (deviceId, remote) =>
     let port = 0
     const auto = await spawnAdb(
       ['-s', deviceId, 'forward', 'tcp:0', remote],
-      15000
+      15000,
     )
     const matched = String(auto.stdout || '')
       .trim()
@@ -214,7 +208,7 @@ export const reverseWebCast: IpcReverseWebCast = (deviceId, remote) =>
       port = await getFreePort()
       const result = await spawnAdb(
         ['-s', deviceId, 'forward', `tcp:${port}`, remote],
-        15000
+        15000,
       )
       if (result.code !== 0) {
         return {
@@ -236,7 +230,7 @@ export const reverseWebCast: IpcReverseWebCast = (deviceId, remote) =>
 export const installApk: IpcInstallWebCastApk = async (deviceId, apkPath) => {
   const result = await spawnAdb(
     ['-s', deviceId, 'install', '-r', '-t', apkPath],
-    180000
+    180000,
   )
   if (result.code === 0) {
     clearPackageListCache(deviceId)
@@ -265,10 +259,7 @@ export const listDisplays: IpcWebCastDisplays = async (deviceId) => {
   // 固定文件名：避免每点一次「信号源」就在设备 tmp 里堆一个 jar
   const jarRemote = `${JAR_DIR}/scrcpy-list.jar`
   await spawnAdb(['-s', deviceId, 'shell', `mkdir -p ${JAR_DIR}`], 15000)
-  const push = await spawnAdb(
-    ['-s', deviceId, 'push', jar, jarRemote],
-    60000
-  )
+  const push = await spawnAdb(['-s', deviceId, 'push', jar, jarRemote], 60000)
   if (push.code !== 0) {
     logger.error('list displays push failed', push.stderr)
     return [{ id: 0, name: '主屏' }]
@@ -307,14 +298,18 @@ export const listDisplays: IpcWebCastDisplays = async (deviceId) => {
 
 /** 轮询设备端 abstract socket，确认 scrcpy-server 已经开始监听。 */
 export const waitWebCast: IpcWaitWebCast = async (deviceId, scid) => {
-  const name = `scrcpy_${scid.padStart(8, '0')}`
-  for (let i = 0; i < 60; i++) {
+  if (!/^\d{1,8}$/.test(String(scid))) return { ok: false }
+  const code = Number(scid)
+  if (!Number.isInteger(code) || code <= 0) return { ok: false }
+  const name = `scrcpy_${String(code).padStart(8, '0')}`
+  const deadline = Date.now() + 12000
+  while (Date.now() < deadline) {
     // 会话已被停掉（换源/关窗口）就别空跑 12 秒
     if (!procs.has(deviceId)) return { ok: false }
 
     const result = await spawnAdb(
       ['-s', deviceId, 'shell', `cat /proc/net/unix | grep -c ${name}`],
-      8000
+      Math.min(2000, Math.max(500, deadline - Date.now())),
     )
     const count = (result.stdout || '').trim()
     if (result.code === 0 && count && count !== '0') return { ok: true }
@@ -337,7 +332,7 @@ function cleanupAllSync() {
       childProcess.spawnSync(
         adb,
         ['-s', deviceId, 'forward', '--remove', `tcp:${port}`],
-        { timeout: 3000, windowsHide: true }
+        { timeout: 3000, windowsHide: true },
       )
     }
     childProcess.spawnSync(adb, ['-s', deviceId, 'shell', KILL_CMD], {

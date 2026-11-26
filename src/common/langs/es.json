@@ -99,7 +99,7 @@
   "uploadFileErr": "Error al subir archivo",
   "fileDownloading": "Descargando archivo {{path}}",
   "download": "Descargar",
-  "fileDownloaded": "Archivo descargado en {{path}}",
+  "fileDownloaded": "Se descargaron {{count}} archivos en {{dir}}",
   "deleteFileConfirm": "¿Seguro de querer eliminar {{name}}?",
   "newFolder": "Nueva Carpeta",
   "newFolderName": "Nombre de la Nueva Carpeta",

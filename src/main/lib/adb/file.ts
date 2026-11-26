@@ -12,7 +12,7 @@ import fs from 'fs-extra'
 import path from 'node:path'
 import readline from 'node:readline'
 import { once } from 'node:events'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { handleEvent } from 'share/main/lib/util'
 import { getUserDataPath } from 'share/main/lib/util'
 import { assertDeletable, normalizeDevicePath } from 'common/guards'
@@ -24,7 +24,7 @@ import {
   shell,
   shellChecked,
   spawnAdb,
-  spawnAdbBuffer,
+  spawnAdbToFile,
   spawnAdbLines,
 } from './base'
 import startWith from 'licia/startWith'
@@ -36,6 +36,7 @@ import {
   IFile,
   IpcCreateDir,
   IpcDeleteDir,
+  IpcDeleteEntries,
   IpcDeleteFile,
   IpcMoveFile,
   IpcOpenFile,
@@ -66,6 +67,7 @@ import {
   slicePage,
 } from './fileIndex'
 import { dirCountCommand, dirPageCommand, dirsFirstCommand } from './fileList'
+import { localFileNameVariant, safeLocalFileName } from 'common/localName'
 
 let client: Client
 
@@ -92,6 +94,38 @@ function withMetaSlot<T>(fn: () => Promise<T>): Promise<T> {
   })
 }
 
+function localTempPath(dest: string) {
+  return path.join(
+    path.dirname(dest),
+    `.${path.basename(dest)}.${randomUUID()}.part`,
+  )
+}
+
+function deviceCacheTag(deviceId: string) {
+  const readable =
+    deviceId
+      .replace(/[^\w.-]+/g, '_')
+      .replace(/^[-.]+|[-.]+$/g, '')
+      .slice(0, 48) || 'device'
+  const digest = createHash('sha256')
+    .update(deviceId)
+    .digest('hex')
+    .slice(0, 16)
+  return `${readable}-${digest}`
+}
+
+function uniqueLocalName(name: string, used: Set<string>) {
+  const safe = safeLocalFileName(name)
+  let candidate = safe
+  let index = 1
+  while (used.has(candidate.toLowerCase())) {
+    candidate = localFileNameVariant(name, index)
+    index++
+  }
+  used.add(candidate.toLowerCase())
+  return candidate
+}
+
 // ---------------------------------------------------------------------------
 // 下载 / 打开
 // ---------------------------------------------------------------------------
@@ -103,6 +137,8 @@ const pullFile: IpcPullFile = async function (
   options = {},
 ) {
   src = normalizeDevicePath(src)
+  if (!dest || dest.includes('\0')) throw new Error('非法本地目标路径')
+  dest = path.resolve(dest)
   let stat
   try {
     stat = await withMetaSlot(() => statFile(deviceId, src))
@@ -126,20 +162,20 @@ const pullFile: IpcPullFile = async function (
     const tempDest = `${dest}.devicedock-${randomUUID()}`
     await fs.ensureDir(tempDest)
     const files = await withMetaSlot(() => readDir(deviceId, src))
+    const usedNames = new Set<string>()
     try {
       // 分批递归：stat 已限流，这里再压一层并发，避免几千个 pull 同时开连接
       for (let i = 0; i < files.length; i += 8) {
         await Promise.all(
-          files
-            .slice(i, i + 8)
-            .map((file) =>
-              pullFile(
-                deviceId,
-                `${src}/${file.name}`,
-                path.join(tempDest, file.name),
-                options,
-              ),
-            ),
+          files.slice(i, i + 8).map((file) => {
+            const localName = uniqueLocalName(file.name, usedNames)
+            return pullFile(
+              deviceId,
+              `${src}/${file.name}`,
+              path.join(tempDest, localName),
+              options,
+            )
+          }),
         )
       }
       await fs.move(tempDest, dest, { overwrite })
@@ -150,6 +186,9 @@ const pullFile: IpcPullFile = async function (
     return
   }
 
+  if (!overwrite && (await fs.pathExists(dest))) {
+    throw new Error(`EEXIST: 本地已存在同名文件：${dest}`)
+  }
   await waitFileSlot()
   // 目标目录可能不存在（下载到 Downloads 子目录）：先建父目录，
   // 否则 createWriteStream 直接 ENOENT，进度停在 0%
@@ -164,6 +203,7 @@ const pullFile: IpcPullFile = async function (
 
   try {
     const id = randomUUID()
+    const transferTemp = localTempPath(dest)
 
     // 非 root 读 /data/data：run-as 把内容直接流到本地，设备上不落盘。
     // 旧做法「run-as cp 到 /data/local/tmp」会因 shell:shell 0771 无写权限失败，
@@ -181,30 +221,35 @@ const pullFile: IpcPullFile = async function (
         stat.size,
       )
       try {
-        const result = await spawnAdbBuffer(
+        await fs.ensureDir(path.dirname(transferTemp))
+        const result = await spawnAdbToFile(
           [
             '-s',
             deviceId,
             'exec-out',
             `run-as ${shellQuotePath(pkg)} cat ${shellQuotePath(rel)}`,
           ],
+          transferTemp,
           120000,
         )
         if (result.timedOut) throw new Error('拉取超时')
         if (result.code !== 0) {
-          throw new Error('拉取失败：没有权限读取该文件（设备未 root）')
-        }
-        const expected = stat.size || 0
-        if (expected > 0 && result.buffer.length !== expected) {
           throw new Error(
-            `文件不完整：期望 ${expected} 字节，实际 ${result.buffer.length} 字节`,
+            '拉取失败：没有权限读取该文件（设备未 root）' +
+              (result.stderr ? `：${result.stderr.slice(0, 300)}` : ''),
           )
         }
-        await fs.writeFile(dest, result.buffer, {
-          flag: overwrite ? 'w' : 'wx',
-        })
+        const expected = stat.size || 0
+        const actual = (await fs.stat(transferTemp)).size
+        if (expected > 0 && actual !== expected) {
+          throw new Error(
+            `文件不完整：期望 ${expected} 字节，实际 ${actual} 字节`,
+          )
+        }
+        await fs.move(transferTemp, dest, { overwrite })
         window.sendTo('main', 'finishTransfer', id, true)
       } catch (e) {
+        await fs.remove(transferTemp).catch(() => undefined)
         window.sendTo('main', 'finishTransfer', id, false)
         throw e
       }
@@ -227,7 +272,7 @@ const pullFile: IpcPullFile = async function (
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let writable: ReturnType<typeof fs.createWriteStream> | null = null
-      let writableCreated = false
+      let settling = false
       // adbd 卡死 / USB 半断时 transfer 既不 error 也不 finish：
       // 没有超时的话 finish 永不执行，fileSemaphore 槽位泄漏，
       // 攒够 5 次之后所有上传下载都停在 waitFileSlot 上，只能重启应用
@@ -240,8 +285,10 @@ const pullFile: IpcPullFile = async function (
         )
       }
 
-      const finish = (error?: any) => {
+      const finish = async (error?: any) => {
         if (settled) return
+        if (settling) return
+        settling = true
         settled = true
         if (idle) {
           clearTimeout(idle)
@@ -260,7 +307,16 @@ const pullFile: IpcPullFile = async function (
           } catch {
             // ignore
           }
-          if (writableCreated) fs.remove(dest).catch(() => undefined)
+          await fs.remove(transferTemp).catch(() => undefined)
+        } else {
+          try {
+            await fs.move(transferTemp, dest, { overwrite })
+          } catch (moveError) {
+            await fs.remove(transferTemp).catch(() => undefined)
+            window.sendTo('main', 'finishTransfer', id, false)
+            reject(moveError)
+            return
+          }
         }
         window.sendTo('main', 'finishTransfer', id, !error)
         if (error) {
@@ -270,15 +326,10 @@ const pullFile: IpcPullFile = async function (
         }
       }
 
-      writable = fs.createWriteStream(dest, {
-        flags: overwrite ? 'w' : 'wx',
-      })
-      writable.on('open', () => {
-        writableCreated = true
-      })
+      writable = fs.createWriteStream(transferTemp, { flags: 'w' })
       // 磁盘满/无权限时 WriteStream 会发 error，没监听就是主进程未捕获异常
-      writable.on('error', (error) => finish(error))
-      writable.on('finish', () => finish())
+      writable.on('error', (error) => void finish(error))
+      writable.on('finish', () => void finish())
       transfer.on(
         'progress',
         throttle(({ bytesTransferred }) => {
@@ -286,7 +337,7 @@ const pullFile: IpcPullFile = async function (
           window.sendTo('main', 'updateTransfer', id, bytesTransferred)
         }, 500),
       )
-      transfer.on('error', (error) => finish(error))
+      transfer.on('error', (error) => void finish(error))
       armIdle()
       transfer.pipe(writable)
     })
@@ -301,7 +352,7 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
   // 而且整个仓库没有任何地方删它（预览一个 1.5G 视频就永久多占 1.5G）
   const dir = getUserDataPath('preview-cache')
   await fs.ensureDir(dir)
-  const tag = deviceId.replace(/[^\w.-]+/g, '_')
+  const tag = deviceCacheTag(deviceId)
   // 同一设备只留最近这份预览，避免越积越多
   try {
     for (const name of await fs.readdir(dir)) {
@@ -312,10 +363,7 @@ const openFile: IpcOpenFile = async function (deviceId, devicePath) {
   } catch {
     // 目录刚建/读失败都不影响打开
   }
-  const safeName = (path.basename(devicePath) || 'preview').replace(
-    /[^\w.-]+/g,
-    '_',
-  )
+  const safeName = safeLocalFileName(path.basename(devicePath) || 'preview')
   const dest = path.join(dir, `${tag}-${safeName}`)
   await pullFile(deviceId, devicePath, dest)
   electronShell.openPath(dest)
@@ -342,26 +390,84 @@ async function getMountPoints(deviceId: string) {
   return mounts
 }
 
-async function assertRemoteDeletable(deviceId: string, devicePath: string) {
-  return assertDeletable(devicePath, await getMountPoints(deviceId))
+async function resolveDeleteTarget(deviceId: string, devicePath: string) {
+  const normalized = normalizeDevicePath(devicePath)
+  const slash = normalized.lastIndexOf('/')
+  const parent = slash <= 0 ? '/' : normalized.slice(0, slash)
+  const name = normalized.slice(slash + 1)
+  if (!name) return normalized
+
+  const realParent = String(
+    await shell(
+      deviceId,
+      `cd ${shellQuotePath(parent)} 2>/dev/null && pwd -P`,
+      5000,
+    ),
+  ).trim()
+  if (!realParent.startsWith('/')) {
+    throw new Error(`无法解析待删除路径的父目录：${devicePath}`)
+  }
+  return normalizeDevicePath(
+    realParent === '/' ? `/${name}` : `${realParent}/${name}`,
+  )
 }
 
-const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
+async function assertRemoteDeletable(deviceId: string, devicePath: string) {
+  const mounts = await getMountPoints(deviceId)
+  // 先做字面检查，避免把明显危险路径送进设备 shell；再解析父目录的
+  // 中间符号链接。最终一层不跟随，删除软链接本身时只移除链接。
+  assertDeletable(devicePath, mounts)
+  const resolved = await resolveDeleteTarget(deviceId, devicePath)
+  return assertDeletable(resolved, mounts)
+}
+
+async function deleteFileEntry(deviceId: string, devicePath: string) {
   const safePath = await assertRemoteDeletable(deviceId, devicePath)
   // checked：rm 失败（只读挂载/权限不足）必须报错，不能让 UI 显示删除成功
   await fileShell(deviceId, 'rm', safePath, undefined, true, 120000)
+}
+
+async function deleteDirEntry(deviceId: string, devicePath: string) {
+  const safePath = await assertRemoteDeletable(deviceId, devicePath)
+  await fileShell(deviceId, 'rm -rf', safePath, undefined, true, 600000)
+}
+
+const deleteFile: IpcDeleteFile = async function (deviceId, devicePath) {
+  await deleteFileEntry(deviceId, devicePath)
   resetFileIndex(deviceId)
 }
 
 const deleteDir: IpcDeleteDir = async function (deviceId, devicePath) {
-  const safePath = await assertRemoteDeletable(deviceId, devicePath)
-  await fileShell(deviceId, 'rm -rf', safePath, undefined, true, 600000)
+  await deleteDirEntry(deviceId, devicePath)
   resetFileIndex(deviceId)
 }
 
-const createDir: IpcCreateDir = async function (deviceId, devicePath) {
+const deleteEntries: IpcDeleteEntries = async function (deviceId, entries) {
+  let deleted = 0
+  const failed: Array<{ path: string; error: string }> = []
+  for (const entry of entries) {
+    try {
+      if (entry.directory) await deleteDirEntry(deviceId, entry.path)
+      else await deleteFileEntry(deviceId, entry.path)
+      deleted++
+    } catch (error: any) {
+      failed.push({
+        path: entry.path,
+        error: error?.message || String(error),
+      })
+    }
+  }
+  if (deleted) resetFileIndex(deviceId)
+  return { deleted, failed }
+}
+
+async function createDirEntry(deviceId: string, devicePath: string) {
   const safePath = normalizeDevicePath(devicePath)
   await fileShell(deviceId, 'mkdir -p', safePath, undefined, true, 60000)
+}
+
+const createDir: IpcCreateDir = async function (deviceId, devicePath) {
+  await createDirEntry(deviceId, devicePath)
   resetFileIndex(deviceId)
 }
 
@@ -369,7 +475,31 @@ const createDir: IpcCreateDir = async function (deviceId, devicePath) {
 // 上传
 // ---------------------------------------------------------------------------
 
-const pushFile: IpcPushFile = async function (deviceId, src, dest) {
+async function removeDeviceTemp(deviceId: string, devicePath: string) {
+  if (!devicePath) return
+  await fileShell(deviceId, 'rm -f', devicePath, undefined, true).catch(
+    () => undefined,
+  )
+}
+
+async function pushFileEntry(
+  deviceId: string,
+  src: string,
+  dest: string,
+  finalizeIndex: boolean,
+): Promise<void> {
+  try {
+    await pushFileEntryInner(deviceId, src, dest)
+  } finally {
+    if (finalizeIndex) resetFileIndex(deviceId)
+  }
+}
+
+async function pushFileEntryInner(
+  deviceId: string,
+  src: string,
+  dest: string,
+): Promise<void> {
   const stat = await fs.lstat(src)
   if (stat.isSymbolicLink()) {
     throw new Error(`不支持上传符号链接：${src}`)
@@ -377,7 +507,7 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
   dest = normalizeDevicePath(dest)
 
   if (stat.isDirectory()) {
-    await createDir(deviceId, dest)
+    await createDirEntry(deviceId, dest)
     const names = await fs.readdir(src)
     // 分批递归：一次 Promise.all 几千个 push 会把 adb server 打满
     for (let i = 0; i < names.length; i += 8) {
@@ -385,7 +515,12 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
         names
           .slice(i, i + 8)
           .map((name) =>
-            pushFile(deviceId, path.join(src, name), `${dest}/${name}`),
+            pushFileEntry(
+              deviceId,
+              path.join(src, name),
+              `${dest}/${name}`,
+              false,
+            ),
           ),
       )
     }
@@ -405,10 +540,13 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
     // 非 root 写 /data/data：先推到 /data/local/tmp，成功后再 cp 进目标目录
     if (startWith(dest, '/data/data/') && !(await isRooted(deviceId))) {
       tmpFilePath = '/data/local/tmp/' + randomUUID()
+    } else {
+      // 同一目录下的临时文件使最终替换成为一次 rename：上传中断不会先截断旧文件。
+      tmpFilePath = `${dest}.devicedock-${randomUUID()}.tmp`
     }
 
     const device = await client.getDevice(deviceId)
-    const transfer = await device.push(src, tmpFilePath || dest)
+    const transfer = await device.push(src, tmpFilePath)
 
     const id = randomUUID()
     window.sendTo(
@@ -441,6 +579,14 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
           idle = null
         }
         release()
+        if (error) {
+          try {
+            ;(transfer as any).cancel?.()
+          } catch {
+            // 已经结束
+          }
+          void removeDeviceTemp(deviceId, tmpFilePath)
+        }
         window.sendTo('main', 'finishTransfer', id, !error)
         if (error) {
           reject(error)
@@ -451,14 +597,23 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
       const cleanup = (error?: any) => {
         if (settled) return
         if (error || !tmpFilePath) {
-          // 失败时别往 /data/data 里拷半个文件，直接删临时文件
-          if (tmpFilePath) deleteFile(deviceId, tmpFilePath).catch(() => {})
+          void removeDeviceTemp(deviceId, tmpFilePath)
           return done(error)
         }
-        fileShell(deviceId, 'cp', tmpFilePath, dest)
-          .then(() => deleteFile(deviceId, tmpFilePath).catch(() => {}))
+        const publish = startWith(dest, '/data/data/')
+          ? fileShell(deviceId, 'cp', tmpFilePath, dest, true)
+          : fileShell(deviceId, 'mv', tmpFilePath, dest, true)
+        publish
+          .then(() =>
+            fileShell(deviceId, 'rm -f', tmpFilePath, undefined, true).catch(
+              () => undefined,
+            ),
+          )
           .then(() => done())
-          .catch((e) => done(e))
+          .catch(async (e) => {
+            await removeDeviceTemp(deviceId, tmpFilePath)
+            done(e)
+          })
       }
 
       transfer.on('end', () => cleanup())
@@ -476,8 +631,10 @@ const pushFile: IpcPushFile = async function (deviceId, src, dest) {
     release()
     throw e
   }
-  resetFileIndex(deviceId)
 }
+
+const pushFile: IpcPushFile = (deviceId, src, dest) =>
+  pushFileEntry(deviceId, src, dest, true)
 
 // ---------------------------------------------------------------------------
 // 移动 / 粘贴
@@ -1368,7 +1525,7 @@ export function clearDeviceCaches(deviceId: string) {
 function fileIndexPath(deviceId: string) {
   return path.join(
     getUserDataPath('file-index'),
-    deviceId.replace(/[^\w.-]+/g, '_') + '.idx',
+    deviceCacheTag(deviceId) + '.idx',
   )
 }
 
@@ -1474,18 +1631,27 @@ async function searchFileIndex(
 
 async function writeFileIndex(file: string, entries: string[]) {
   await fs.ensureDir(path.dirname(file))
-  const stream = fs.createWriteStream(file)
+  const temp = `${file}.${randomUUID()}.tmp`
+  const stream = fs.createWriteStream(temp)
   try {
-    stream.write(INDEX_HEADER + '\n')
-    for (const entry of entries) {
-      if (!stream.write(entry + '\n')) {
-        await once(stream, 'drain')
+    const failed = new Promise<never>((_, reject) => {
+      stream.once('error', reject)
+    })
+    const writing = (async () => {
+      stream.write(INDEX_HEADER + '\n')
+      for (const entry of entries) {
+        if (!stream.write(entry + '\n')) {
+          await once(stream, 'drain')
+        }
       }
-    }
-    stream.end()
-    await once(stream, 'finish')
+      stream.end()
+      await once(stream, 'finish')
+    })()
+    await Promise.race([writing, failed])
+    await fs.move(temp, file, { overwrite: true })
   } catch (e) {
     stream.destroy()
+    await fs.remove(temp).catch(() => undefined)
     throw e
   }
 }
@@ -1701,6 +1867,10 @@ async function buildFileIndex(
   }
 
   const add = (abs: string) => {
+    if (seen.size >= INDEX_MAX_ENTRIES) {
+      truncated = true
+      return
+    }
     if (seen.has(abs)) return
     seen.add(abs)
 
@@ -1732,12 +1902,13 @@ async function buildFileIndex(
   const queue = roots.slice()
   const workerCount = Math.min(3, Math.max(1, queue.length))
   const workers = Array.from({ length: workerCount }, async () => {
-    while (queue.length && !aborted()) {
+    while (queue.length && !aborted() && !truncated) {
       const root = queue.shift()!
       const q = shellQuotePath(root.scan)
       onProgress(root.display, found)
 
       const cmd = `cd ${q} && find -L . -print`
+      let stopScan: (() => void) | null = null
       try {
         const result = await spawnAdbLines(
           ['-s', deviceId, 'shell', cmd],
@@ -1750,8 +1921,12 @@ async function buildFileIndex(
             add(
               item.startsWith('/') ? item : `${root.display}/${item.slice(2)}`,
             )
+            if (truncated) stopScan?.()
           },
-          (kill) => killers.push(kill),
+          (kill) => {
+            stopScan = kill
+            killers.push(kill)
+          },
         )
         // find 在遇到单个无权限子目录时通常返回 1，但其它可达目录已完整输出；
         // 把这类预期权限错误当成可缓存结果，真正致命/shell 中断才标记不完整。
@@ -1765,6 +1940,10 @@ async function buildFileIndex(
       } catch {
         // 单个根失败不影响本次结果，但这份索引不能当成完整缓存。
         complete = false
+      }
+      if (stopScan) {
+        const index = killers.indexOf(stopScan)
+        if (index >= 0) killers.splice(index, 1)
       }
       onProgress(root.display, found)
     }
@@ -1804,10 +1983,12 @@ async function searchAllDisksWithIndex(
   aborted: () => boolean,
   offset: number,
   limit: number,
+  requestId: string,
 ): Promise<{ files: IFile[]; total: number; partial?: boolean } | null> {
   const emitProgress = (root: string, found: number) => {
     window.sendTo('main', 'searchProgress', {
       deviceId,
+      requestId,
       root,
       found,
       elapsedMs: Date.now() - started,
@@ -1815,7 +1996,12 @@ async function searchAllDisksWithIndex(
   }
   const emitFiles = (files: IFile[]) => {
     if (files.length) {
-      window.sendTo('main', 'searchResults', { deviceId, kw: keyword, files })
+      window.sendTo('main', 'searchResults', {
+        deviceId,
+        requestId,
+        kw: keyword,
+        files,
+      })
     }
   }
 
@@ -1862,6 +2048,7 @@ async function liveSearchAllDisks(
   safeKeyword: string,
   killers: Array<() => void>,
   aborted: () => boolean,
+  requestId: string,
 ): Promise<{ files: IFile[]; partial: boolean }> {
   const roots = await getSearchRoots(deviceId, currentPath)
   const mode = await getFindExecMode(deviceId)
@@ -1874,6 +2061,7 @@ async function liveSearchAllDisks(
   const emit = (root: string) =>
     window.sendTo('main', 'searchProgress', {
       deviceId,
+      requestId,
       root,
       found: found.length,
       elapsedMs: Date.now() - started,
@@ -1961,6 +2149,7 @@ const searchDir: IpcSearchDir = async (
   allDisks,
   offset = 0,
   limit = 1000,
+  requestId = randomUUID(),
 ) => {
   const kw = keyword.trim()
   if (!kw) return { files: [], total: 0 }
@@ -2061,6 +2250,7 @@ const searchDir: IpcSearchDir = async (
         () => cancelled,
         offset,
         limit,
+        requestId,
       )
 
       let result: { files: IFile[]; total: number; partial?: boolean }
@@ -2071,6 +2261,7 @@ const searchDir: IpcSearchDir = async (
           safeKeyword,
           killers,
           () => cancelled,
+          requestId,
         )
         result = {
           ...slicePage(live.files, offset, limit),
@@ -2084,6 +2275,7 @@ const searchDir: IpcSearchDir = async (
 
       window.sendTo('main', 'searchProgress', {
         deviceId,
+        requestId,
         root: '完成',
         found: result.total,
         elapsedMs: Date.now() - started,
@@ -2347,6 +2539,7 @@ export async function init(c: Client) {
   handleEvent('openFile', openFile)
   handleEvent('deleteFile', deleteFile)
   handleEvent('deleteDir', deleteDir)
+  handleEvent('deleteEntries', deleteEntries)
   handleEvent('createDir', createDir)
   handleEvent('moveFile', moveFile)
   handleEvent('pasteFiles', pasteFiles)

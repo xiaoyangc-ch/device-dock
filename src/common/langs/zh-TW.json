@@ -136,7 +136,7 @@
   "uploadFileErr": "上傳檔案失敗",
   "fileDownloading": "正在下載檔案 {{path}}",
   "download": "下載",
-  "fileDownloaded": "檔案已下載至 {{path}}",
+  "fileDownloaded": "已下載 {{count}} 個檔案到 {{dir}}",
   "deleteFileConfirm": "確定要刪除 {{name}} 嗎?",
   "newFolder": "薪資料夾",
   "newFolderName": "新資料夾名稱",

@@ -25,6 +25,7 @@ import PageToolbar, {
   ToolSpace,
   ToolText,
 } from '../layout/PageToolbar'
+import { isOnlineDevice } from '../../lib/util'
 
 interface IShot {
   data: string
@@ -53,15 +54,15 @@ export default observer(function Screenshot() {
   }
 
   async function recapture() {
+    const seq = ++captureSeq.current
+    setImage(null)
     if (!store.device) return
 
     // 离线设备抓图必然失败：清掉上一张旧图，不要弹错误
-    if (store.device.type === 'offline') {
-      setImage(null)
+    if (!isOnlineDevice(store.device)) {
       return
     }
 
-    const seq = ++captureSeq.current
     const deviceId = store.device.id
 
     try {
@@ -87,8 +88,10 @@ export default observer(function Screenshot() {
       })
     } catch {
       // 设备掉线/超时：清旧图并提示，不能让 useEffect 里留未处理拒绝
-      setImage(null)
-      notify(t('commonErr'), { icon: 'error' })
+      if (seq === captureSeq.current && store.device?.id === deviceId) {
+        setImage(null)
+        notify(t('commonErr'), { icon: 'error' })
+      }
     }
   }
 
@@ -156,7 +159,7 @@ export default observer(function Screenshot() {
         <ToolText mono>
           {hasImage
             ? `${image!.width} × ${image!.height} · PNG · ${fileSize(
-                image!.size
+                image!.size,
               )}`
             : ''}
         </ToolText>

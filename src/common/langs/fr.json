@@ -132,7 +132,7 @@
   "uploadFileErr": "Échec du téléversement du fichier",
   "fileDownloading": "Téléchargement du fichier {{path}}",
   "download": "Télécharger",
-  "fileDownloaded": "Fichier téléchargé vers {{path}}",
+  "fileDownloaded": "{{count}} fichiers téléchargés vers {{dir}}",
   "deleteFileConfirm": "Êtes-vous sûr de vouloir supprimer {{name}} ?",
   "newFolder": "Nouveau dossier",
   "newFolderName": "Nom du nouveau dossier",

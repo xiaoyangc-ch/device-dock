@@ -8,7 +8,7 @@ import { Application } from './application'
 import { Process } from './process'
 import { File } from './file'
 import { installPackages, setMainStore } from '../../lib/util'
-import { setMemStore } from 'share/renderer/lib/util'
+import { isOnlineDevice } from '../lib/util'
 import { IDevice } from 'common/types'
 
 class Store extends BaseStore {
@@ -47,9 +47,9 @@ class Store extends BaseStore {
   selectDevice = (device: string | IDevice | null) => {
     if (isStr(device)) {
       const found = find(this.devices, ({ id }) => id === device)
-      if (found) this.device = found
+      if (found && isOnlineDevice(found)) this.device = found
     } else {
-      this.device = device
+      this.device = device && isOnlineDevice(device) ? device : null
     }
     setMainStore('device', this.device)
   }
@@ -70,7 +70,9 @@ class Store extends BaseStore {
 
   private async init() {
     const cached = await main.getMainStore('device')
-    if (cached) runInAction(() => (this.device = cached))
+    if (cached && isOnlineDevice(cached)) {
+      runInAction(() => (this.device = cached))
+    }
 
     try {
       await this.refreshDevices()
@@ -99,7 +101,6 @@ class Store extends BaseStore {
 
     runInAction(() => {
       this.devices = devices
-      setMemStore('devices', devices)
     })
 
     if (isEmpty(devices)) {
@@ -108,13 +109,17 @@ class Store extends BaseStore {
     }
 
     if (!this.device) {
-      this.selectDevice(devices[0])
+      this.selectDevice(devices.find(isOnlineDevice) || null)
       return
     }
 
     const current = find(devices, ({ id }) => id === this.device!.id)
     // 用新对象替换：否则在线状态/名称/版本一直停在旧快照
-    this.selectDevice(current || devices[0])
+    this.selectDevice(
+      current && isOnlineDevice(current)
+        ? current
+        : devices.find(isOnlineDevice) || null,
+    )
   }
 
   private bindEvent() {

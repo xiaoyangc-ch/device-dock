@@ -17,6 +17,7 @@ const DANGEROUS = new Set([
   // 文件写操作
   'deleteFile',
   'deleteDir',
+  'deleteEntries',
   'createDir',
   'moveFile',
   'renameFile',
@@ -29,6 +30,7 @@ const DANGEROUS = new Set([
   'diskScanAll',
   // 应用安装/卸载/启停
   'installPackage',
+  'installRemotePackage',
   'uninstallPackage',
   'clearPackage',
   'disablePackage',
@@ -38,6 +40,21 @@ const DANGEROUS = new Set([
   // 设备级动作
   'rebootDevice',
   'openAdbCli',
+  'restartAdbServer',
+  'startWireless',
+  'root',
+  'connectDevice',
+  'disconnectDevice',
+  'pairDevice',
+  'forward',
+  'reverse',
+  // APM 账户与远程设备
+  'apmState',
+  'apmLogin',
+  'apmSearch',
+  'apmConnect',
+  'apmCloseAdb',
+  'apmTask',
 ])
 
 const page = new URLSearchParams(location.search).get('page') || ''
@@ -50,18 +67,13 @@ const api = (
   isMainWin
     ? mainObj
     : Object.fromEntries(
-        Object.entries(mainObj).filter(([key]) => !DANGEROUS.has(key))
+        Object.entries(mainObj).filter(([key]) => !DANGEROUS.has(key)),
       )
 ) as typeof mainObj
 
 contextBridge.exposeInMainWorld('preload', preloadObj)
 contextBridge.exposeInMainWorld('main', api)
-contextBridge.exposeInMainWorld(
-  'node',
-  canUseStream
-    ? nodeObj
-    : {}
-)
+contextBridge.exposeInMainWorld('node', canUseStream ? nodeObj : {})
 
 declare global {
   const main: typeof api

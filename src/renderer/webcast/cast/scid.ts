@@ -10,7 +10,8 @@ export function makeScid(deviceId: string, now = Date.now()) {
   for (let i = 0; i < deviceId.length; i++) {
     hash = (hash * 31 + deviceId.charCodeAt(i)) | 0
   }
-  const seed = Math.abs(hash) + Math.floor(now / 1000)
+  // 用毫秒而不是秒：用户连续点两次重连时也不能复用残留 server 的 socket 名。
+  const seed = Math.abs(hash) + Math.floor(now % 999983)
   // 加 1：取模可能得到 0，而 scid=0 是 scrcpy 的默认值，
   // 会和残留 server 的 socket 名撞上
   return String((seed % 999999) + 1)

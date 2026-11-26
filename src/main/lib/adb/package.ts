@@ -6,12 +6,13 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
 import { Client } from '@devicefarmer/adbkit'
 import * as yauzl from 'yauzl'
 import { shell, shellChecked, spawnAdb } from './base'
 import { handleEvent } from 'share/main/lib/util'
-import { clearPackageCaches } from './server'
+import { clearPackageCaches, clearPackageInfo } from './server'
 import {
   IpcClearPackage,
   IpcDisablePackage,
@@ -21,11 +22,12 @@ import {
   IpcGetPackages,
   IpcGetTopPackage,
   IpcInstallPackage,
+  IpcInstallRemotePackage,
   IpcStartPackage,
   IpcStopPackage,
   IpcUninstallPackage,
 } from 'common/types'
-import { assertPackageName } from 'common/guards'
+import { assertPackageName, normalizeDevicePath } from 'common/guards'
 import { LruCache } from 'common/lru'
 import {
   parseCurrentUser,
@@ -33,6 +35,7 @@ import {
   parsePackagePaths,
   parseTopPackage,
 } from './packageParse'
+import { shellQuotePath } from './filePath'
 
 let client: Client
 
@@ -130,8 +133,10 @@ const stopPackage: IpcStopPackage = async (deviceId, pkg) => {
 }
 
 const clearPackage: IpcClearPackage = async (deviceId, pkg) => {
+  assertPackageName(pkg)
   const device = await client.getDevice(deviceId)
   await device.clear(pkg)
+  clearPackageInfo(deviceId, pkg)
 }
 
 const startPackage: IpcStartPackage = async (deviceId, pkg) => {
@@ -149,6 +154,32 @@ const installPackage: IpcInstallPackage = async (deviceId, apkPath) => {
   clearPackageCaches(deviceId)
 }
 
+const installRemotePackage: IpcInstallRemotePackage = async (
+  deviceId,
+  apkPath,
+) => {
+  const source = normalizeDevicePath(apkPath)
+  if (!/\.apk$/i.test(source)) throw new Error('只能安装 APK 文件')
+
+  const temp = `/data/local/tmp/devicedock-install-${randomUUID()}.apk`
+  await shellChecked(
+    deviceId,
+    `cp ${shellQuotePath(source)} ${shellQuotePath(temp)}`,
+    120000,
+  )
+  try {
+    const device = await client.getDevice(deviceId)
+    await device.installRemote(temp)
+  } finally {
+    await shell(deviceId, `rm -f ${shellQuotePath(temp)}`, 10000).catch(
+      () => undefined,
+    )
+  }
+  clearPackageListCache(deviceId)
+  clearIconCache(deviceId)
+  clearPackageCaches(deviceId)
+}
+
 const uninstallPackage: IpcUninstallPackage = async (deviceId, pkg) => {
   const device = await client.getDevice(deviceId)
   await device.uninstall(pkg)
@@ -161,11 +192,13 @@ const disablePackage: IpcDisablePackage = async (deviceId, pkg) => {
   assertPackageName(pkg)
   // checked：系统应用禁用失败必须报错，以前一律当成功
   await shellChecked(deviceId, `pm disable-user ${pkg}`)
+  clearPackageInfo(deviceId, pkg)
 }
 
 const enablePackage: IpcEnablePackage = async (deviceId, pkg) => {
   assertPackageName(pkg)
   await shellChecked(deviceId, `pm enable ${pkg}`)
+  clearPackageInfo(deviceId, pkg)
 }
 
 /**
@@ -275,7 +308,13 @@ function readApkIcon(
           stream.on('data', (chunk: Buffer) => {
             size += chunk.length
             // 图标不该有几 MB：超过就放弃，避免畸形 APK 把内存吃满
-            if (size <= 2 * 1024 * 1024) chunks.push(chunk)
+            if (size > 2 * 1024 * 1024) {
+              chunks.length = 0
+              stream.destroy()
+              finish(null)
+              return
+            }
+            chunks.push(chunk)
           })
           stream.on('error', () => finish(null))
           stream.on('end', () => {
@@ -487,6 +526,7 @@ export async function init(c: Client) {
   handleEvent('stopPackage', stopPackage)
   handleEvent('startPackage', startPackage)
   handleEvent('installPackage', installPackage)
+  handleEvent('installRemotePackage', installRemotePackage)
   handleEvent('uninstallPackage', uninstallPackage)
   handleEvent('getTopPackage', getTopPackage)
   handleEvent('clearPackage', clearPackage)

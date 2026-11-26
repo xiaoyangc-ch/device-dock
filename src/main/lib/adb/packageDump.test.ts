@@ -17,6 +17,8 @@ __DEVICEDOCK_PACKAGE__com.demo.app
     versionCode=1 targetSdk=22
     versionName=1.0
     minSdk=21
+__DEVICEDOCK_PACKAGE__com.demo.combined
+    versionCode=2 minSdk=24 targetSdk=35
 `)
   assert.deepEqual(parsed.get('com.android.settings'), {
     packageName: 'com.android.settings',
@@ -27,6 +29,8 @@ __DEVICEDOCK_PACKAGE__com.demo.app
   })
   assert.equal(parsed.get('com.demo.app')?.minSdkVersion, 21)
   assert.equal(parsed.get('com.demo.app')?.targetSdkVersion, 22)
+  assert.equal(parsed.get('com.demo.combined')?.minSdkVersion, 24)
+  assert.equal(parsed.get('com.demo.combined')?.targetSdkVersion, 35)
 })
 
 test('dumpsys 命令：过滤非法包名并保留合法包', () => {

@@ -28,12 +28,15 @@ test('删除守卫：拒绝设备盘根与内部存储根', () => {
     '/oem',
   ]
   for (const path of blocked) {
-    assert.throws(
-      () => assertDeletable(path),
-      /拒绝删除/,
-      `应当拒绝：${path}`
-    )
+    assert.throws(() => assertDeletable(path), /拒绝删除/, `应当拒绝：${path}`)
   }
+})
+
+test('删除守卫：系统分区内部路径同样拒绝', () => {
+  assert.throws(() => assertDeletable('/system/app/Foo.apk'))
+  assert.throws(() => assertDeletable('/vendor/lib64/libfoo.so'))
+  assert.throws(() => assertDeletable('/apex/com.android.runtime'))
+  assert.doesNotThrow(() => assertDeletable('/sdcard/DCIM/photo.jpg'))
 })
 
 test('删除守卫：正常的两级以上路径放行', () => {
@@ -56,16 +59,13 @@ test('删除守卫：末尾斜杠归一化后同样受保护', () => {
 
 test('删除守卫：运行时挂载根一律拒绝', () => {
   const mounts = ['/storage/ABCD-1234', '/mnt/media_rw/ABCD-1234']
-  assert.throws(
-    () => assertDeletable('/storage/ABCD-1234/', mounts),
-    /挂载点/
-  )
+  assert.throws(() => assertDeletable('/storage/ABCD-1234/', mounts), /挂载点/)
   assert.throws(
     () => assertDeletable('/mnt/media_rw/ABCD-1234', mounts),
-    /挂载点/
+    /挂载点/,
   )
   assert.doesNotThrow(() =>
-    assertDeletable('/storage/ABCD-1234/DCIM/a.jpg', mounts)
+    assertDeletable('/storage/ABCD-1234/DCIM/a.jpg', mounts),
   )
 })
 
@@ -109,7 +109,7 @@ test('包名：拒绝注入与畸形输入', () => {
     assert.throws(
       () => assertPackageName(pkg),
       /非法包名/,
-      `应当拒绝：${JSON.stringify(pkg)}`
+      `应当拒绝：${JSON.stringify(pkg)}`,
     )
   }
 })

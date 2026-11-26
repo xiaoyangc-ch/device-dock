@@ -1,5 +1,6 @@
 import isIp from 'licia/isIp'
 import isNumeric from 'licia/isNumeric'
+import { IDevice } from 'common/types'
 
 /** 「5555」补成「tcp:5555」；已带 tcp:/usb: 前缀的原样返回。 */
 export function normalizePort(port: string) {
@@ -11,4 +12,10 @@ export function normalizePort(port: string) {
 export function isRemoteDevice(deviceId: string) {
   if (!deviceId.includes(':')) return false
   return isIp.v4(deviceId.split(':')[0])
+}
+
+export function isOnlineDevice<T extends Pick<IDevice, 'type'>>(
+  device: T | null | undefined,
+): device is T {
+  return device?.type === 'device' || device?.type === 'emulator'
 }

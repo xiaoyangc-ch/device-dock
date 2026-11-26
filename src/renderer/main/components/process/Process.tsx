@@ -25,6 +25,7 @@ import singleton from 'licia/singleton'
 import { fallbackIcon } from '../../lib/appIcon'
 import DataGrid from 'luna-data-grid'
 import { useWindowResize } from 'share/renderer/lib/hooks'
+import { notify } from 'share/renderer/lib/util'
 
 // cmdline 形如 com.android.systemui:remote：取前段当包名
 const PKG_RE = /^[\w.]+/
@@ -205,8 +206,14 @@ export default observer(function Process() {
     )
     if (!confirmed) return
 
-    await main.stopPackage(device!.id, selected.packageName)
-    await getProcesses()
+    try {
+      await main.stopPackage(device!.id, selected.packageName)
+      await getProcesses()
+    } catch (e: any) {
+      notify(t('commonErr') + (e?.message ? `：${e.message}` : ''), {
+        icon: 'error',
+      })
+    }
   }
 
   return (

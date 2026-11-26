@@ -1,7 +1,6 @@
 import getUrlParam from 'licia/getUrlParam'
 import { action, makeObservable, observable } from 'mobx'
 import BaseStore from '../store/BaseStore'
-import last from 'licia/last'
 
 class Store extends BaseStore {
   url = ''
@@ -20,7 +19,15 @@ class Store extends BaseStore {
 
   setUrl(url: string) {
     this.url = url
-    preload.setTitle(decodeURIComponent(last(url.split('/'))))
+    try {
+      const parsed = new URL(url)
+      const name = decodeURIComponent(
+        parsed.pathname.split('/').filter(Boolean).pop() || '',
+      )
+      preload.setTitle(name || 'Video')
+    } catch {
+      preload.setTitle('Video')
+    }
   }
 
   private bindEvent() {

@@ -14,6 +14,8 @@ import store from '../../store'
 import { getOverview } from '../../lib/overview'
 import Style from './DeviceStage.module.scss'
 import useLatency from './useLatency'
+import { isOnlineDevice } from '../../lib/util'
+import { notify } from 'share/renderer/lib/util'
 
 const START_CODE = new Uint8Array([0, 0, 0, 1])
 const FIRST_FRAME_TIMEOUT = 3500
@@ -35,18 +37,16 @@ export default observer(function DeviceStage() {
   const { device } = store
   const [url, setUrl] = useState('')
   const [streamReady, setStreamReady] = useState(false)
-  const [preview, setPreview] = useState<'idle' | 'loading' | 'error' | 'offline'>(
-    'idle'
-  )
+  const [preview, setPreview] = useState<
+    'idle' | 'loading' | 'error' | 'offline'
+  >('idle')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [resolution, setResolution] = useState('')
   const urlRef = useRef('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // 离线设备不探测延迟：只会每 3 秒失败一次，侧栏显示 -- 即可
-  const ms = useLatency(
-    device && device.type !== 'offline' ? device.id : ''
-  )
+  const ms = useLatency(isOnlineDevice(device) ? device!.id : '')
 
   useEffect(() => {
     if (urlRef.current) {
@@ -64,7 +64,7 @@ export default observer(function DeviceStage() {
       setPreview('idle')
       return
     }
-    if (device.type === 'offline') {
+    if (!isOnlineDevice(device)) {
       setPreview('offline')
       return
     }
@@ -89,7 +89,7 @@ export default observer(function DeviceStage() {
       pngRequesting = true
       let nextDelay = 1000
       setPreview((state) =>
-        state === 'error' || state === 'offline' ? 'loading' : state
+        state === 'error' || state === 'offline' ? 'loading' : state,
       )
 
       try {
@@ -98,7 +98,7 @@ export default observer(function DeviceStage() {
 
         if (data) {
           const next = URL.createObjectURL(
-            new Blob([data], { type: 'image/png' })
+            new Blob([data], { type: 'image/png' }),
           )
           const prev = urlRef.current
           urlRef.current = next
@@ -142,22 +142,36 @@ export default observer(function DeviceStage() {
     let frames = 0
     let gotFrame = false
     let failed = false
+    let paused = false
 
-    function fail() {
-      if (!alive || failed) return
-      failed = true
-
+    function resetDecoder() {
       try {
         decoder?.close()
       } catch {
         // ignore
       }
       decoder = null
+      codec = ''
+      sps = null
+      pps = null
+      pending = new Uint8Array(0)
+    }
+
+    function fail() {
+      if (!alive || failed) return
+      failed = true
+
+      resetDecoder()
+      void main.stopPreviewStream().catch(() => undefined)
       setStreamReady(false)
       startPng()
     }
 
     function onFrame(frame: VideoFrame) {
+      if (paused || failed) {
+        frame.close()
+        return
+      }
       const canvas = canvasRef.current
       if (canvas) {
         // 尺寸跟着画面走：竖屏/横屏切换时画布要重建
@@ -233,7 +247,7 @@ export default observer(function DeviceStage() {
             type: type === 5 ? 'key' : 'delta',
             timestamp: (timestamp += 33333),
             data: concatBytes(parts),
-          })
+          }),
         )
       } catch {
         fail()
@@ -280,35 +294,61 @@ export default observer(function DeviceStage() {
     const offChunk = main.on(
       'previewChunk',
       (deviceId: string, data: ArrayBuffer) => {
-        if (!alive || failed || deviceId !== device.id) return
+        if (!alive || paused || failed || deviceId !== device.id) return
         pushChunk(data)
-      }
+      },
     )
     const offError = main.on('previewError', (deviceId: string) => {
       if (!alive || deviceId !== device.id) return
       fail()
     })
 
-    main.startPreviewStream(device.id).catch(fail)
+    let watchdog: ReturnType<typeof setTimeout> | null = null
+    const startStream = () => {
+      if (!alive || failed || paused) return
+      resetDecoder()
+      gotFrame = false
+      main.startPreviewStream(device.id).catch(fail)
+      if (!gotFrame && !watchdog) {
+        // 3.5 秒没首帧（设备不支持 screenrecord / 编码器被占）就退回截图
+        watchdog = setTimeout(() => {
+          watchdog = null
+          if (alive && !paused && !gotFrame) fail()
+        }, FIRST_FRAME_TIMEOUT)
+      }
+    }
 
-    // 3.5 秒没首帧（设备不支持 screenrecord / 编码器被占）就退回截图
-    const watchdog = setTimeout(() => {
-      if (alive && !gotFrame) fail()
-    }, FIRST_FRAME_TIMEOUT)
+    if (document.hidden) {
+      paused = true
+    } else {
+      startStream()
+    }
+
+    const onVisibility = () => {
+      if (!alive || failed) return
+      if (document.hidden && !paused) {
+        paused = true
+        if (watchdog) {
+          clearTimeout(watchdog)
+          watchdog = null
+        }
+        resetDecoder()
+        void main.stopPreviewStream().catch(() => undefined)
+      } else if (!document.hidden && paused) {
+        paused = false
+        startStream()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       alive = false
-      clearTimeout(watchdog)
+      if (watchdog) clearTimeout(watchdog)
       offChunk()
       offError()
       stopPng()
-
-      try {
-        decoder?.close()
-      } catch {
-        // ignore
-      }
-      decoder = null
+      document.removeEventListener('visibilitychange', onVisibility)
+      resetDecoder()
 
       main.stopPreviewStream().catch(() => undefined)
       if (urlRef.current) {
@@ -332,7 +372,7 @@ export default observer(function DeviceStage() {
 
   useEffect(() => {
     setResolution('')
-    if (!device || device.type === 'offline') return
+    if (!isOnlineDevice(device)) return
 
     let alive = true
     getOverview(device.id)
@@ -340,7 +380,7 @@ export default observer(function DeviceStage() {
         if (!alive) return
 
         const raw = String(
-          overview.physicalResolution || overview.resolution || ''
+          overview.physicalResolution || overview.resolution || '',
         )
         // "1080x1920" → "1920p"：侧栏只要一个短标签
         const matched = /(\d+)x(\d+)/.exec(raw)
@@ -355,7 +395,7 @@ export default observer(function DeviceStage() {
     }
   }, [device?.id, device?.type])
 
-  const online = !!device && device.type !== 'offline'
+  const online = isOnlineDevice(device)
   const latency = ms !== null && ms >= 0 ? `${ms} ms` : '--'
   const android =
     device && device.androidVersion ? `Android ${device.androidVersion}` : '--'
@@ -429,7 +469,9 @@ export default observer(function DeviceStage() {
             onClick={() => setPickerOpen(!pickerOpen)}
             title={t('switchDevice')}
           >
-            <span className={online ? Style.dot : Style.dot + ' ' + Style.off} />
+            <span
+              className={online ? Style.dot : Style.dot + ' ' + Style.off}
+            />
             <span className={Style.name}>
               {device ? device.name : t('notConnected')}
             </span>
@@ -456,7 +498,7 @@ export default observer(function DeviceStage() {
       <div className={Style.quick}>
         <button
           className={Style.quickBtn}
-          disabled={!device}
+          disabled={!online}
           onClick={() => store.selectPanel('screenshot')}
         >
           <span className="icon-camera" />
@@ -464,7 +506,7 @@ export default observer(function DeviceStage() {
         </button>
         <button
           className={Style.quickBtn}
-          disabled={!device}
+          disabled={!online}
           onClick={() => main.showScreencast()}
         >
           <span className="icon-screencast" />
@@ -489,13 +531,17 @@ export default observer(function DeviceStage() {
                     (device && item.id === device.id ? ' ' + Style.active : '')
                   }
                   onClick={() => {
+                    if (!isOnlineDevice(item)) {
+                      notify(t('connectAuthorizeHint'), { icon: 'info' })
+                      return
+                    }
                     store.selectDevice(item.id)
                     setPickerOpen(false)
                   }}
                 >
                   <span
                     className={
-                      item.type === 'offline'
+                      !isOnlineDevice(item)
                         ? Style.dot + ' ' + Style.off
                         : Style.dot
                     }

@@ -132,7 +132,7 @@
   "uploadFileErr": "Falha ao enviar arquivo",
   "fileDownloading": "Baixando arquivo {{path}}",
   "download": "Baixar",
-  "fileDownloaded": "Arquivo baixado para {{path}}",
+  "fileDownloaded": "{{count}} arquivos baixados para {{dir}}",
   "deleteFileConfirm": "Tem certeza de que deseja excluir {{name}}?",
   "newFolder": "Nova Pasta",
   "newFolderName": "Nome da Nova Pasta",

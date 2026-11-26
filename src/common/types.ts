@@ -138,10 +138,18 @@ export type IpcSearchDir = (
   /** 分页：默认 0/1000；索引搜索支持翻页看全部结果 */
   offset?: number,
   limit?: number,
+  requestId?: string,
 ) => Promise<{ files: IFile[]; total: number; partial?: boolean }>
 export type IpcCreateDir = (deviceId: string, path: string) => Promise<void>
 export type IpcDeleteDir = IpcCreateDir
 export type IpcDeleteFile = IpcCreateDir
+export type IpcDeleteEntries = (
+  deviceId: string,
+  entries: Array<{ path: string; directory: boolean }>,
+) => Promise<{
+  deleted: number
+  failed: Array<{ path: string; error: string }>
+}>
 export type IpcOpenFile = IpcCreateDir
 export type IpcPushFile = (
   deviceId: string,
@@ -165,6 +173,10 @@ export type IpcGetPackageApkPath = (
   packageName: string,
 ) => Promise<string>
 export type IpcInstallPackage = (
+  deviceId: string,
+  apkPath: string,
+) => Promise<void>
+export type IpcInstallRemotePackage = (
   deviceId: string,
   apkPath: string,
 ) => Promise<void>

@@ -15,11 +15,3 @@ export async function getOverview(deviceId: string, force = false) {
   cache.set(deviceId, { ts: Date.now(), data })
   return data
 }
-
-export function clearOverview(deviceId?: string) {
-  if (deviceId) {
-    cache.delete(deviceId)
-  } else {
-    cache.clear()
-  }
-}

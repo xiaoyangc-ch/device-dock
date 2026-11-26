@@ -34,7 +34,10 @@ test('iconOf：按扩展名与 mime 选线性图标', () => {
   assert.equal(iconOf(f({ name: 'app.apk' })), 'icon-package')
   assert.equal(iconOf(f({ name: 'a.png' })), 'icon-image')
   assert.equal(iconOf(f({ name: 'a.bin', mime: 'image/png' })), 'icon-image')
-  assert.equal(iconOf(f({ name: 'a.bin', mime: 'video/mp4' })), 'icon-video-recorder')
+  assert.equal(
+    iconOf(f({ name: 'a.bin', mime: 'video/mp4' })),
+    'icon-video-recorder',
+  )
   assert.equal(iconOf(f({ name: 'a.log' })), 'icon-file-text')
   assert.equal(iconOf(f({ name: 'a.bin' })), 'icon-open-file')
 })
@@ -68,4 +71,8 @@ test('文件名：本地冲突自动编号且保留扩展名', () => {
   assert.equal(conflictName('a.txt', 0), 'a.txt')
   assert.equal(conflictName('a.txt', 1), 'a (1).txt')
   assert.equal(conflictName('.hidden', 2), '.hidden (2)')
+  assert.equal(
+    conflictName('..\\..\\Startup\\evil.exe', 0),
+    '.._.._Startup_evil.exe',
+  )
 })

@@ -132,7 +132,7 @@
   "uploadFileErr": "Dosya yüklenemedi",
   "fileDownloading": "{{path}} dosyası indiriliyor",
   "download": "İndir",
-  "fileDownloaded": "Dosya {{path}} konumuna indirildi",
+  "fileDownloaded": "{{count}} dosya {{dir}} konumuna indirildi",
   "deleteFileConfirm": "{{name}} dosyasını silmek istediğinizden emin misiniz?",
   "newFolder": "Yeni Klasör",
   "newFolderName": "Yeni Klasör Adı",

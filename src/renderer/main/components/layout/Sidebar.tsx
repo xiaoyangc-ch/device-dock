@@ -4,6 +4,7 @@ import { t } from 'common/util'
 import Style from './Sidebar.module.scss'
 import DeviceStage from './DeviceStage'
 import SettingsModal from '../toolbar/SettingsModal'
+import { isOnlineDevice } from '../../lib/util'
 
 // 侧栏分组：设备（连接/概览/文件/应用）、系统（进程/性能/硬盘/终端）、采集（截屏/日志）
 const GROUPS = [
@@ -36,12 +37,10 @@ const GROUPS = [
 
 export default observer(function Sidebar() {
   const collapsed = store.settings.sidebarCollapsed
-  const online = store.devices.filter((item) => item.type !== 'offline').length
+  const online = store.devices.filter(isOnlineDevice).length
 
   return (
-    <aside
-      className={Style.sidebar + (collapsed ? ' ' + Style.collapsed : '')}
-    >
+    <aside className={Style.sidebar + (collapsed ? ' ' + Style.collapsed : '')}>
       <div className={Style.brand}>
         <span className={Style.mark} />
         <span className={Style.brandText}>
@@ -76,11 +75,7 @@ export default observer(function Sidebar() {
       </nav>
 
       <div className={Style.footer}>
-        <span
-          className={
-            store.devices.length ? Style.dot : Style.dot + ' ' + Style.off
-          }
-        />
+        <span className={online ? Style.dot : Style.dot + ' ' + Style.off} />
         {store.devices.length ? (
           <span className={Style.footerText}>
             {t('devicesOnline', { count: store.devices.length, online })}
@@ -100,9 +95,7 @@ export default observer(function Sidebar() {
         <button
           className={Style.collapseBtn}
           title={t(collapsed ? 'expandSidebar' : 'collapseSidebar')}
-          onClick={() =>
-            store.settings.set('sidebarCollapsed', !collapsed)
-          }
+          onClick={() => store.settings.set('sidebarCollapsed', !collapsed)}
         >
           <span className="icon-panel-right" />
         </button>

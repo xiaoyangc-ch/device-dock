@@ -6,9 +6,6 @@ import { app, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import log from '../../common/log'
 import endWith from 'licia/endWith'
 import pkg from '../../../../package.json'
-import { exec as _exec } from 'child_process'
-import { promisify } from 'util'
-import { createHash } from 'crypto'
 import { pathToFileURL } from 'node:url'
 import { isTrustedAppUrl } from 'common/appUrl'
 import {
@@ -16,8 +13,6 @@ import {
   sanitizeForDiagnostics,
   startOperation,
 } from './operationLog'
-
-const execAsync = promisify(_exec)
 
 /** dev 下 __dirname 在 dist/share/main，生产在 app.asar 内：基路径不同 */
 export function resolve(p: string) {
@@ -135,12 +130,4 @@ export function getOpenFileFromArgv(argv: string[], ext: string) {
     if (endWith(arg, ext)) return arg
   }
   return ''
-}
-
-export async function exec(command: string) {
-  return (await execAsync(command)).stdout
-}
-
-export function sha1(data: string) {
-  return createHash('sha1').update(data).digest('hex')
 }

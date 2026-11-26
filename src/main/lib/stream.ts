@@ -28,6 +28,7 @@ interface StreamSession {
   pendingBytes: number
   flushTimer: ReturnType<typeof setTimeout> | null
   closed: boolean
+  onSenderDestroyed: () => void
 }
 
 const sessions = new Map<string, StreamSession>()
@@ -93,6 +94,7 @@ function dispose(session: StreamSession) {
   session.pending = []
   session.pendingBytes = 0
   sessions.delete(session.key)
+  session.sender.removeListener('destroyed', session.onSenderDestroyed)
 
   try {
     session.socket.destroy()
@@ -112,7 +114,7 @@ function dispose(session: StreamSession) {
 function closeWith(
   session: StreamSession,
   type: 'close' | 'error',
-  message?: string
+  message?: string,
 ) {
   if (session.closed) return
   if (type === 'close') {
@@ -168,6 +170,7 @@ export function init() {
       pendingBytes: 0,
       flushTimer: null,
       closed: false,
+      onSenderDestroyed: () => dispose(session),
     }
     sessions.set(key, session)
 
@@ -188,10 +191,10 @@ export function init() {
     })
     socket.on('close', () => closeWith(session, 'close'))
     socket.on('error', (err: Error) =>
-      closeWith(session, 'error', err?.message || String(err))
+      closeWith(session, 'error', err?.message || String(err)),
     )
 
-    sender.once('destroyed', () => dispose(session))
+    sender.once('destroyed', session.onSenderDestroyed)
     logger.debug('open stream', key, portNumber)
   })
 
