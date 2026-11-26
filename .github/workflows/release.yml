@@ -136,6 +136,12 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
           fi
           find artifacts -type f -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
+          find artifacts -type f -printf '%f\n' | sort > /tmp/release-assets.txt
+          while IFS= read -r asset; do
+            if ! grep -Fxq "$asset" /tmp/release-assets.txt; then
+              gh release delete-asset "$GITHUB_REF_NAME" "$asset" --yes
+            fi
+          done < <(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
