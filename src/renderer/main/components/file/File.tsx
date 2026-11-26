@@ -31,6 +31,7 @@ import FileInspector from './FileInspector'
 import { getOverview } from '../../lib/overview'
 import { conflictName, isValidFileName } from './fileUtil'
 import { LruCache } from 'common/lru'
+import { retryOnce } from 'common/retry'
 
 const PAGE_SIZE = 1000
 const DIR_CACHE_TTL = 15000
@@ -175,7 +176,7 @@ export default observer(function File() {
     if (!device) return
 
     let alive = true
-    getOverview(device.id)
+    retryOnce(() => getOverview(device.id), 700)
       .then((overview) => {
         if (!alive) return
 
@@ -278,7 +279,9 @@ export default observer(function File() {
     loadedRef.current = 0
 
     try {
-      const page = await main.readDirPage(device.id, target, 0, PAGE_SIZE)
+      const page = await retryOnce(() =>
+        main.readDirPage(device.id, target, 0, PAGE_SIZE),
+      )
       if (seq !== navSeq.current) return
       loadedRef.current = page.files.length
 
@@ -292,11 +295,12 @@ export default observer(function File() {
 
       setFileList(enriched)
       cacheDir(cacheKey, enriched, page.total)
-    } catch {
+    } catch (e: any) {
       // 设备掉线时 readDirPage 会 reject：不 catch 就是未处理异常 + 永远转圈
       if (seq === navSeq.current) {
         setFileList([])
         setTotal(0)
+        notify(t('fileListFailed') + (e?.message || e), { icon: 'error' })
       }
     } finally {
       if (seq === navSeq.current) setLoading(false)
@@ -1497,7 +1501,9 @@ export default observer(function File() {
         <span className={PageStyle.statusRight}>
           <span>
             {device
-              ? t('internalStorageFree', { size: storageFree || '--' })
+              ? t('internalStorageFree', {
+                  size: storageFree || t('loading'),
+                })
               : t('deviceNotConnected')}
           </span>
         </span>

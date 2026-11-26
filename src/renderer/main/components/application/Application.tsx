@@ -46,6 +46,12 @@ function sizeCmp(a: string, b: string) {
   return fileSize(a) - fileSize(b)
 }
 
+function formatTimestamp(timestamp: number) {
+  return timestamp > 0
+    ? dateFormat(new Date(timestamp), 'yyyy-mm-dd HH:MM:ss')
+    : '--'
+}
+
 const columns = [
   { id: 'label', title: t('name'), sortable: true, weight: 20 },
   { id: 'packageName', title: t('package'), sortable: true, weight: 25 },
@@ -339,14 +345,8 @@ export default observer(function Application() {
             dataSize: fileSize(info.dataSize),
             cacheSize: fileSize(info.cacheSize),
             enabled: info.enabled ? t('enabled') : t('disabled'),
-            firstInstallTime: dateFormat(
-              new Date(info.firstInstallTime),
-              'yyyy-mm-dd HH:MM:ss',
-            ),
-            lastUpdateTime: dateFormat(
-              new Date(info.lastUpdateTime),
-              'yyyy-mm-dd HH:MM:ss',
-            ),
+            firstInstallTime: formatTimestamp(info.firstInstallTime),
+            lastUpdateTime: formatTimestamp(info.lastUpdateTime),
           }))
         : [],
     [packageInfos, store.application.listView],
@@ -483,7 +483,11 @@ export default observer(function Application() {
           }}
         />
         <ToolSeparator />
-        <ToolText>{t('totalPackage', { total: packageInfos.length })}</ToolText>
+        <ToolText>
+          {isLoading && isEmpty(packageInfos)
+            ? t('loading')
+            : t('totalPackage', { total: packageInfos.length })}
+        </ToolText>
         <ToolSpace />
         <ToolButton
           icon="icon-add"

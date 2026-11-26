@@ -1,4 +1,4 @@
-import builder from 'electron-builder'
+import builder, { Arch, Platform } from 'electron-builder'
 import isMac from 'licia/isMac.js'
 import isWindows from 'licia/isWindows.js'
 import { resolve } from 'node:path'
@@ -124,4 +124,7 @@ if (isWindows) {
 
 await builder.build({
   config,
+  targets: args.includes('--win')
+    ? Platform.WINDOWS.createTarget(['nsis'], Arch.x64)
+    : undefined,
 })

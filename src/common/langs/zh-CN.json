@@ -111,6 +111,7 @@
   "fileUploading": "正在上传文件 {{path}}",
   "uploadFileErr": "上传文件失败",
   "fileDownloading": "正在下载文件 {{path}}",
+  "fileListFailed": "读取文件夹失败：",
   "download": "下载",
   "fileDownloaded": "已下载 {{count}} 个文件到 {{dir}}",
   "deleteFileConfirm": "确定要删除 {{name}} 吗？",

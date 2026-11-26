@@ -639,6 +639,7 @@ export async function init() {
     logger.info('device removed', deviceId)
     webCast.stopWebCast(deviceId).catch(() => {})
     base.deleteDeviceStore(deviceId)
+    base.clearProcessCaches(deviceId)
     server.clearPackageCaches(deviceId)
     // 按 deviceId 建表的缓存都要清：file 的全盘索引/stat 缓存（单设备可达 30 万条）、
     // 应用图标（内存 + disk），否则无线设备换个端口重连就留下一份永久驻留的旧数据

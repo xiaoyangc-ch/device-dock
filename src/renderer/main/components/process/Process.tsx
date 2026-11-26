@@ -48,6 +48,7 @@ export default observer(function Process() {
   const [processes, setProcesses] = useState<any[]>([])
   const [selected, setSelected] = useState<any>(null)
   const [filter, setFilter] = useState('')
+  const [loading, setLoading] = useState(true)
 
   const packagesRef = useRef<string[]>([])
   const packageInfosRef = useRef<any[]>([])
@@ -63,31 +64,36 @@ export default observer(function Process() {
         packagesRef.current = await main.getPackages(device.id)
         packageInfosRef.current = await main.getPackageInfos(
           device.id,
-          packagesRef.current
+          packagesRef.current,
         )
       } catch {
         // 设备掉线时不能变成未处理拒绝（轮询循环里没人接这个 promise）
       }
     }),
-    [device?.id, device?.type]
+    [device?.id, device?.type],
   )
 
   // 每 5 秒轮询一次：同一进程名/包名不变时复用上一轮的 DOM 节点，
   // 否则 260 行 × 6 列每轮全部重建（老设备上能明显看到卡顿）
   const rowCache = useRef(
-    new Map<string, { packageName: string; nameEl: HTMLElement }>()
+    new Map<string, { packageName: string; nameEl: HTMLElement }>(),
   )
 
   const getProcesses = useCallback(
     singleton(async () => {
-      if (!device) return
-
-      // 首次进页面必须等包名/图标就绪，否则第一屏全是 cmdline 原始名
-      if (isEmpty(packageInfosRef.current)) {
-        await getPackageInfos()
+      if (!device) {
+        setLoading(false)
+        return
       }
 
-      const all = await main.getProcesses(device.id)
+      // 包名目录和进程快照并行拉取，老设备首次进入不会串行等两轮。
+      const packagesReady = isEmpty(packageInfosRef.current)
+        ? getPackageInfos().catch(() => undefined)
+        : Promise.resolve()
+      const [all] = await Promise.all([
+        main.getProcesses(device.id),
+        packagesReady,
+      ])
       const infos = packageInfosRef.current
       const byPackage = new Map(infos.map((info) => [info.packageName, info]))
 
@@ -119,8 +125,8 @@ export default observer(function Process() {
         nameEl.append(
           img,
           document.createTextNode(
-            String(item.name).replace(info.packageName, info.label)
-          )
+            String(item.name).replace(info.packageName, info.label),
+          ),
         )
 
         rowCache.current.set(key, { packageName: info.packageName, nameEl })
@@ -148,10 +154,17 @@ export default observer(function Process() {
       }
 
       setProcesses(list)
+      setLoading(false)
     }),
     // 换设备必须重建闭包：deps 为空会一直轮询旧设备
-    [device?.id, device?.type]
+    [device?.id, device?.type],
   )
+
+  useEffect(() => {
+    setProcesses([])
+    setSelected(null)
+    setLoading(true)
+  }, [device ? device.id : ''])
 
   // 面板保活时切设备也要重启轮询：deps 只写 [] 会一直拉第一台
   useEffect(() => {
@@ -167,6 +180,7 @@ export default observer(function Process() {
       } catch {
         // 设备掉线/重启 adb 时会 reject：不抓住的话下面的 setTimeout
         // 永远不会执行，列表就永久冻住
+        setLoading(false)
       }
 
       if (!destroyed) {
@@ -187,7 +201,7 @@ export default observer(function Process() {
     if (!selected || !has(selected, 'packageName')) return
 
     const confirmed = await LunaModal.confirm(
-      t('stopPackageConfirm', { name: selected.label })
+      t('stopPackageConfirm', { name: selected.label }),
     )
     if (!confirmed) return
 
@@ -213,7 +227,11 @@ export default observer(function Process() {
           }}
         />
         <ToolSeparator />
-        <ToolText>{t('totalProcess', { total: processes.length })}</ToolText>
+        <ToolText>
+          {loading && isEmpty(processes)
+            ? t('loading')
+            : t('totalProcess', { total: processes.length })}
+        </ToolText>
         <ToolSpace />
         <ToolButton
           disabled={selected === null || !has(selected, 'packageName')}

@@ -192,7 +192,10 @@ class Connection(private val client: LocalSocket) : Thread() {
                 null
             }
             val labelRes = applicationInfo.labelRes
-            if (labelRes != 0 && resources != null) {
+            val nonLocalizedLabel = applicationInfo.nonLocalizedLabel?.toString()
+            if (!nonLocalizedLabel.isNullOrBlank()) {
+                label = nonLocalizedLabel
+            } else if (labelRes != 0 && resources != null) {
                 try {
                     label = resources.getString(labelRes)
                 } catch (e: Exception) {
@@ -244,9 +247,25 @@ class Connection(private val client: LocalSocket) : Thread() {
     }
 
     private fun getResources(apkPath: String): Resources {
-        val assetManager = AssetManager::class.java.newInstance() as AssetManager
-        val addAssetManagerMethod =
-            assetManager.javaClass.getMethod("addAssetPath", String::class.java)
+        // Android 6 上 AssetManager/Resources 的构造器均为隐藏 API。
+        // 直接实例化在不同定制 ROM 上会被替换或拒绝，这里逐个反射兼容。
+        val constructors = AssetManager::class.java.declaredConstructors.sortedBy {
+            it.parameterCount
+        }
+        val constructor = constructors.firstOrNull()
+            ?: throw IllegalStateException("AssetManager constructor missing")
+        constructor.isAccessible = true
+        val assetManager = if (constructor.parameterCount == 0) {
+            constructor.newInstance() as AssetManager
+        } else {
+            constructor.newInstance(false) as AssetManager
+        }
+        val addAssetManagerMethod = assetManager.javaClass.methods.firstOrNull {
+            it.name == "addAssetPath" &&
+                it.parameterCount == 1 &&
+                it.parameterTypes[0] == String::class.java
+        } ?: throw IllegalStateException("addAssetPath missing")
+        addAssetManagerMethod.isAccessible = true
         addAssetManagerMethod.invoke(assetManager, apkPath)
 
         val displayMetrics = DisplayMetrics()
@@ -254,7 +273,19 @@ class Connection(private val client: LocalSocket) : Thread() {
         val configuration = Configuration()
         configuration.setToDefaults()
 
-        return Resources(assetManager, displayMetrics, configuration)
+        val resourcesConstructor = Resources::class.java.declaredConstructors
+            .firstOrNull {
+                it.parameterCount == 3 &&
+                    it.parameterTypes[0] == AssetManager::class.java &&
+                    it.parameterTypes[1] == DisplayMetrics::class.java &&
+                    it.parameterTypes[2] == Configuration::class.java
+            } ?: throw IllegalStateException("Resources constructor missing")
+        resourcesConstructor.isAccessible = true
+        return resourcesConstructor.newInstance(
+            assetManager,
+            displayMetrics,
+            configuration
+        ) as Resources
     }
 
     private fun getSignatures(packageInfo: PackageInfo): JSONArray {

@@ -16,6 +16,10 @@ interface IProps extends IModalProps {
 
 const DATE_FORMAT = 'yyyy-mm-dd HH:MM:ss'
 
+function formatTimestamp(timestamp: number) {
+  return timestamp > 0 ? dateFormat(new Date(timestamp), DATE_FORMAT) : '--'
+}
+
 async function sha256Base64(value: string) {
   const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
@@ -82,12 +86,9 @@ export default function PackageInfoModal(props: IProps) {
         item(t('targetSdkVersion'), packageInfo.targetSdkVersion)}
       {item(
         t('firstInstallTime'),
-        dateFormat(new Date(packageInfo.firstInstallTime), DATE_FORMAT),
+        formatTimestamp(packageInfo.firstInstallTime),
       )}
-      {item(
-        t('lastUpdateTime'),
-        dateFormat(new Date(packageInfo.lastUpdateTime), DATE_FORMAT),
-      )}
+      {item(t('lastUpdateTime'), formatTimestamp(packageInfo.lastUpdateTime))}
       {item(t('apkSize'), fileSize(packageInfo.apkSize))}
       {item(t('appSize'), fileSize(packageInfo.appSize))}
       {item(t('dataSize'), fileSize(packageInfo.dataSize))}

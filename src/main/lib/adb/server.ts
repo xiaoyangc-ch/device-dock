@@ -19,6 +19,13 @@ import { encodeDevicePath } from './filePath'
 import { normalizeDevicePath } from 'common/guards'
 import { LruCache } from 'common/lru'
 import { parsePackageListing } from './packageParse'
+import {
+  buildPackageDumpCommand,
+  IPackageDumpInfo,
+  normalizePackageTimestamp,
+  parsePackageDump,
+} from './packageDump'
+import { packageLabelFallback } from './packageLabel'
 import pkg from '../../../../package.json'
 import { isDeviceServerCompatible } from './deviceProtocol'
 
@@ -400,6 +407,10 @@ const hostMetaPending = new Map<
 >()
 const HOST_META_TTL = 5 * 60 * 1000
 const HOST_META_FAILURE_TTL = 10 * 1000
+const hostDetailCache = new Map<
+  string,
+  { at: number; map: Map<string, IPackageDumpInfo> }
+>()
 
 export async function prewarm(deviceId: string) {
   try {
@@ -413,10 +424,41 @@ export async function prewarm(deviceId: string) {
 export function clearPackageCaches(deviceId: string) {
   verCache.delete(deviceId)
   hostMetaCache.delete(deviceId)
+  hostDetailCache.delete(deviceId)
   const prefix = deviceId + '|'
   for (const key of [...pkgInfoCache.keys()]) {
     if (key.startsWith(prefix)) pkgInfoCache.delete(key)
   }
+}
+
+/**
+ * 麒麟 Android 6 的设备端 IPackageManager 反射可能失败。
+ * 此时用 dumpsys 批量补齐版本、安装时间和 SDK，避免界面长期显示 0/1970。
+ */
+async function getHostPackageDetails(deviceId: string, packageNames: string[]) {
+  const cached = hostDetailCache.get(deviceId)
+  const map =
+    cached && Date.now() - cached.at < HOST_META_TTL
+      ? new Map(cached.map)
+      : new Map<string, IPackageDumpInfo>()
+  const missing = [...new Set(packageNames)].filter((name) => !map.has(name))
+
+  for (let i = 0; i < missing.length; i += 50) {
+    const names = missing.slice(i, i + 50)
+    const command = buildPackageDumpCommand(names)
+    if (!command) continue
+    try {
+      const output = await shell(deviceId, command, 20000)
+      for (const [name, info] of parsePackageDump(output)) {
+        map.set(name, info)
+      }
+    } catch (e) {
+      logger.debug('getHostPackageDetails failed', e)
+      break
+    }
+  }
+  hostDetailCache.set(deviceId, { at: Date.now(), map })
+  return map
 }
 
 /**
@@ -523,9 +565,12 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
   }
 
   if (misses.length) {
-    const [deviceClient, hostMeta] = await Promise.all([
+    const [deviceClient, hostMeta, hostDetails] = await Promise.all([
       getDeviceClient(deviceId),
       getHostPackageMeta(deviceId).catch(() => null),
+      getHostPackageDetails(deviceId, misses).catch(
+        () => new Map<string, IPackageDumpInfo>(),
+      ),
     ])
     let fetched: IPackageInfo[] = []
     try {
@@ -547,6 +592,7 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
       const pkg = misses[j]
       const info = fetchedByName.get(pkg)
       const meta = hostMeta?.get(pkg)
+      const detail = hostDetails.get(pkg)
       const apkPath =
         (typeof info?.apkPath === 'string' && info.apkPath) ||
         meta?.apkPath ||
@@ -556,22 +602,31 @@ const getPackageInfos: IpcGetPackageInfos = async (deviceId, packageNames) => {
       )
       const normalized: IPackageInfo = {
         packageName: pkg,
-        label: typeof info?.label === 'string' && info.label ? info.label : pkg,
+        label:
+          typeof info?.label === 'string' && info.label
+            ? info.label
+            : packageLabelFallback(pkg),
         icon: typeof info?.icon === 'string' ? info.icon : '',
         enabled: info?.enabled !== false,
         versionName:
-          typeof info?.versionName === 'string' ? info.versionName : '',
+          typeof info?.versionName === 'string' && info.versionName
+            ? info.versionName
+            : detail?.versionName || '',
         apkPath,
         apkSize: Number(info?.apkSize) || 0,
         system: typeof info?.system === 'boolean' ? info.system : system,
-        firstInstallTime: Number(info?.firstInstallTime) || 0,
-        lastUpdateTime: Number(info?.lastUpdateTime) || 0,
+        firstInstallTime:
+          normalizePackageTimestamp(info?.firstInstallTime) ||
+          normalizePackageTimestamp(detail?.firstInstallTime),
+        lastUpdateTime:
+          normalizePackageTimestamp(info?.lastUpdateTime) ||
+          normalizePackageTimestamp(detail?.lastUpdateTime),
         minSdkVersion: Number.isFinite(Number(info?.minSdkVersion))
           ? Number(info?.minSdkVersion)
-          : undefined,
+          : detail?.minSdkVersion,
         targetSdkVersion: Number.isFinite(Number(info?.targetSdkVersion))
           ? Number(info?.targetSdkVersion)
-          : undefined,
+          : detail?.targetSdkVersion,
         dataSize: Number(info?.dataSize) || 0,
         cacheSize: Number(info?.cacheSize) || 0,
         appSize: Number(info?.appSize) || 0,

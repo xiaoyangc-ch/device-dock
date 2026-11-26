@@ -4,6 +4,8 @@ import icon from '../../../renderer/assets/icon.png'
 import { t } from 'common/util'
 
 const CHANGES = [
+  '4.1.2　麒麟 Android 6：应用元数据、进程加载和首次读取重试优化',
+
   '4.1.1　关于页支持一键导出脱敏诊断信息与失败操作 ID',
 
   '4.1.0　设备服务自动升级、索引流式加载、应用缓存边界与 Electron/AGP 工具链升级',

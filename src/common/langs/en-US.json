@@ -111,6 +111,7 @@
   "fileUploading": "Uploading file {{path}}",
   "uploadFileErr": "Failed to upload file",
   "fileDownloading": "Downloading file {{path}}",
+  "fileListFailed": "Failed to read folder: ",
   "download": "Download",
   "fileDownloaded": "Downloaded {{count}} files to {{dir}}",
   "deleteFileConfirm": "Are you sure you want to delete {{name}}?",

@@ -20,6 +20,7 @@ import { decodeAdbOutput } from 'common/adbParse'
 import { handleEvent, resolveResources } from 'share/main/lib/util'
 import { getSettingsStore } from '../store'
 import { IpcGetProcesses, IpcReverseTcp, IProcess } from 'common/types'
+import { parseTop, TopColumn } from './processParse'
 
 const logger = log('adbBase')
 const settingsStore = getSettingsStore()
@@ -81,7 +82,7 @@ export function getAdbPath(): string {
     return adbPathCache.value
   }
   let bin = resolveResources(
-    process.platform === 'win32' ? 'adb/adb.exe' : 'adb/adb'
+    process.platform === 'win32' ? 'adb/adb.exe' : 'adb/adb',
   )
   const custom = settingsStore.get('adbPath')
   // 只接受文件名为 adb / adb.exe 的普通文件：设置写错时不能变成任意可执行文件
@@ -136,17 +137,17 @@ function terminate(cp: childProcess.ChildProcess) {
 export async function shell(
   deviceId: string,
   cmd: string,
-  timeoutMs?: number
+  timeoutMs?: number,
 ): Promise<string>
 export async function shell(
   deviceId: string,
   cmd: string[],
-  timeoutMs?: number
+  timeoutMs?: number,
 ): Promise<string[]>
 export async function shell(
   deviceId: string,
   cmd: string | string[],
-  timeoutMs = 15000
+  timeoutMs = 15000,
 ): Promise<string | string[]> {
   logger.debug('shell', cmd)
   if (!client) throw new Error('adb client 未初始化')
@@ -195,12 +196,12 @@ export async function shell(
 export async function shellChecked(
   deviceId: string,
   command: string,
-  timeoutMs = 15000
+  timeoutMs = 15000,
 ): Promise<string> {
   const output = await shell(
     deviceId,
     `${command}; echo "${EXIT_MARKER}:$?"`,
-    timeoutMs
+    timeoutMs,
   )
   const lines = output.split('\n')
   let code = 0
@@ -229,7 +230,7 @@ export async function forwardTcp(deviceId: string, remote: string) {
   const device = await client.getDevice(deviceId)
   const forwards = await device.listForwards()
   const existing = forwards.find(
-    (item) => item.remote === remote && item.serial === deviceId
+    (item) => item.remote === remote && item.serial === deviceId,
   )
   if (existing) return Number(existing.local.replace('tcp:', ''))
 
@@ -254,12 +255,6 @@ export const reverseTcp: IpcReverseTcp = async function (deviceId, remote) {
 // 进程列表
 // ---------------------------------------------------------------------------
 
-type TopColumn = {
-  key: string
-  /** args 列吃掉行尾剩余内容（进程名里可能有空格） */
-  rest?: boolean
-}
-
 const TOP_COLUMNS: TopColumn[] = [
   { key: 'pid' },
   { key: '%cpu' },
@@ -270,68 +265,46 @@ const TOP_COLUMNS: TopColumn[] = [
   { key: 'args', rest: true },
 ]
 
-function normalizeColumn(raw: string): string {
-  const lower = raw.toLowerCase()
-  if (lower === 'cpu%') return '%cpu'
-  if (lower === 'uid') return 'user'
-  if (lower === 'rss') return 'res'
-  return lower
-}
+type TopMode = 'modern' | 'legacy-fast' | 'legacy'
+const topModes = new Map<string, TopMode>()
 
-/**
- * 从 top 输出里找表头 + 数据行。
- * 新版 toybox 支持 `top -o`，表头就是参数里的列；老版本只认默认列，
- * 需要按实际表头映射（CPU%/UID/RSS 等写法不一样）。
- */
-function parseTop(output: string, columns: TopColumn[]): IProcess[] {
-  const lines = output.split('\n')
-  let start = -1
-  let active = columns
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!/^PID\b/.test(line)) continue
-    start = i + 1
-    // 表头和请求的列不一致（老 top）：以设备实际输出为准
-    const header = line.split(/\s+/).map(normalizeColumn)
-    if (header.join(',') !== columns.map((c) => c.key).join(',')) {
-      active = header.map((key, index) => ({
-        key,
-        rest: index === header.length - 1,
-      }))
-    }
-    break
-  }
-  if (start < 0) return []
-
-  const rows: IProcess[] = []
-  for (const raw of lines.slice(start)) {
-    const line = raw.trim()
-    if (!line) continue
-    const parts = line.split(/\s+/)
-    const row: any = {}
-    active.forEach((column, index) => {
-      row[column.key] = column.rest
-        ? parts.slice(index).join(' ')
-        : parts[index] || ''
-    })
-    rows.push(row as IProcess)
-  }
-  return rows
+export function clearProcessCaches(deviceId: string) {
+  processCache.delete(deviceId)
+  pidNameCache.delete(deviceId)
+  topModes.delete(deviceId)
 }
 
 async function fetchProcesses(deviceId: string): Promise<IProcess[]> {
   const command =
     'top -b -n 1' + TOP_COLUMNS.map((c) => ` -o ${c.key}`).join('')
-  const modern = await shell(deviceId, command)
-  let rows = parseTop(String(modern), TOP_COLUMNS)
-  if (!rows.length) {
-    // 老 top 不支持 -b/-o：退回到默认列输出
-    const legacy = await shell(deviceId, 'top -n 1')
-    rows = parseTop(String(legacy), TOP_COLUMNS)
+  const mode = topModes.get(deviceId)
+
+  const run = async (cmd: string, nextMode: TopMode) => {
+    try {
+      const rows = parseTop(String(await shell(deviceId, cmd)), TOP_COLUMNS)
+      if (rows.length) topModes.set(deviceId, nextMode)
+      return rows
+    } catch {
+      return []
+    }
   }
-  // 跳过 top 自己：它的 args 就是上面那条命令
-  return rows.filter((row) => (row as any).args !== command)
+
+  let rows: IProcess[] = []
+  if (mode !== 'legacy-fast' && mode !== 'legacy') {
+    rows = await run(command, 'modern')
+  }
+  if (!rows.length && mode !== 'legacy') {
+    // Android 6/toolbox 的 top 支持 -d 0，单次采样从约 3 秒降到约 0.2 秒。
+    rows = await run('top -n 1 -d 0', 'legacy-fast')
+  }
+  if (!rows.length) {
+    // 个别老固件不认 -d 0，再退回默认采样。
+    rows = await run('top -n 1', 'legacy')
+  }
+
+  return rows.filter(
+    (row) => (row as any).args !== command && (row as any).name !== 'top',
+  )
 }
 
 const PROCESS_TTL = 1500
@@ -390,7 +363,10 @@ export type AdbResult = {
   timedOut: boolean
 }
 
-export function spawnAdb(args: string[], timeoutMs = 60000): Promise<AdbResult> {
+export function spawnAdb(
+  args: string[],
+  timeoutMs = 60000,
+): Promise<AdbResult> {
   return new Promise((resolve, reject) => {
     const cp = spawnAdbProcess(args)
     const out: Buffer[] = []
@@ -441,7 +417,7 @@ export function spawnAdbLines(
   args: string[],
   timeoutMs: number,
   onLine: (line: string) => void,
-  onSpawn?: (kill: () => void) => void
+  onSpawn?: (kill: () => void) => void,
 ): Promise<{ code: number | null; timedOut: boolean; stderr: string }> {
   return new Promise((resolve, reject) => {
     const cp = spawnAdbProcess(args)
@@ -512,7 +488,7 @@ export function spawnAdbLines(
 /** 二进制安全：exec-out 拉文件时绝不能走文本解码，否则内容会被破坏。 */
 export function spawnAdbBuffer(
   args: string[],
-  timeoutMs = 60000
+  timeoutMs = 60000,
 ): Promise<{ buffer: Buffer; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     const cp = spawnAdbProcess(args)

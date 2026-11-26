@@ -3,6 +3,7 @@ import chunk from 'licia/chunk'
 import { IPackageInfo } from 'common/types'
 import { notify } from 'share/renderer/lib/util'
 import { t } from 'common/util'
+import { retryOnce } from 'common/retry'
 import store from '../../store'
 import { placeholderInfo } from './applicationModel'
 
@@ -31,11 +32,17 @@ export function useApplicationPackages(
       setIsLoading(true)
 
       try {
-        const packages = await main.getPackages(
-          deviceId,
-          store.application.sysPackage,
+        const packages = await retryOnce(() =>
+          main.getPackages(deviceId, store.application.sysPackage),
         )
         if (seq !== loadSeq.current) return
+
+        // 先展示完整包名占位，再逐批补名称/版本，麒麟老固件也不会长时间空白。
+        setPackageInfos(
+          packages.map((name) =>
+            placeholderInfo(name, store.application.sysPackage),
+          ),
+        )
 
         const chunks = chunk(packages, CHUNK_SIZE)
         const parts: IPackageInfo[][] = new Array(chunks.length)
