@@ -126,5 +126,7 @@ await builder.build({
   config,
   targets: args.includes('--win')
     ? Platform.WINDOWS.createTarget(['nsis'], Arch.x64)
-    : undefined,
+    : args.includes('--mac-arm64')
+      ? Platform.MAC.createTarget(['dmg'], Arch.arm64)
+      : undefined,
 })

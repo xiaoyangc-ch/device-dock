@@ -16,7 +16,7 @@
     "build": "zx script/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "pack": "zx script/pack.mjs",
-    "pack:mac:adhoc": "npm run build && zx script/pack.mjs && node script/sign-mac-adhoc.mjs",
+    "pack:mac:adhoc": "npm run build && zx script/pack.mjs --mac-arm64 && node script/sign-mac-adhoc.mjs",
     "pack:dir": "zx script/pack.mjs --dir",
     "pack:mas-dev": "zx script/pack.mjs --mas-dev",
     "pack:mas": "zx script/pack.mjs --mas",
